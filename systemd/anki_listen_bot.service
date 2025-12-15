@@ -1,0 +1,14 @@
+[Unit]
+Description=anki_listen_bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/anki_listen_bot
+EnvironmentFile=/opt/anki_listen_bot/.env
+ExecStart=/opt/anki_listen_bot/.venv/bin/python -m app.main
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

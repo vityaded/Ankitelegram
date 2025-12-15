@@ -1,0 +1,264 @@
+from __future__ import annotations
+
+import secrets
+from datetime import datetime
+from sqlalchemy import select, update, delete, func
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models import Deck, Card, User, Enrollment, Review, StudySession, Flag, CardTranslation, TranslationCache
+
+def _new_token() -> str:
+    return secrets.token_urlsafe(18)
+
+# --- Deck ---
+async def create_deck(session: AsyncSession, admin_tg_id: int, title: str, new_per_day: int) -> Deck:
+    deck = Deck(admin_tg_id=admin_tg_id, title=title[:255], token=_new_token(), new_per_day=new_per_day)
+    session.add(deck)
+    await session.commit()
+    await session.refresh(deck)
+    return deck
+
+async def get_deck_by_token(session: AsyncSession, token: str) -> Deck | None:
+    res = await session.execute(select(Deck).where(Deck.token == token))
+    return res.scalar_one_or_none()
+
+async def get_deck_by_id(session: AsyncSession, deck_id: str) -> Deck | None:
+    res = await session.execute(select(Deck).where(Deck.id == deck_id))
+    return res.scalar_one_or_none()
+
+async def update_deck_new_per_day(session: AsyncSession, deck_id: str, n: int) -> None:
+    await session.execute(update(Deck).where(Deck.id == deck_id).values(new_per_day=n))
+    await session.commit()
+
+async def rotate_deck_token(session: AsyncSession, deck_id: str) -> str:
+    token = _new_token()
+    await session.execute(update(Deck).where(Deck.id == deck_id).values(token=token))
+    await session.commit()
+    return token
+
+async def set_deck_active(session: AsyncSession, deck_id: str, active: bool) -> None:
+    await session.execute(update(Deck).where(Deck.id == deck_id).values(is_active=active))
+    await session.commit()
+
+async def list_admin_decks(session: AsyncSession, admin_tg_id: int) -> list[Deck]:
+    res = await session.execute(select(Deck).where(Deck.admin_tg_id == admin_tg_id).order_by(Deck.created_at.desc()))
+    return list(res.scalars().all())
+
+
+async def list_all_decks(session: AsyncSession) -> list[Deck]:
+    res = await session.execute(select(Deck).order_by(Deck.created_at.desc()))
+    return list(res.scalars().all())
+
+async def delete_deck_full(session: AsyncSession, deck_id: str) -> dict[str, int]:
+    """Delete deck and all associated data (cards, enrollments, reviews, sessions, flags).
+    Returns counts for basic visibility.
+    """
+    # Delete card-linked tables via subquery to avoid SQLite parameter limits.
+    card_ids_subq = select(Card.id).where(Card.deck_id == deck_id)
+
+    res_reviews = await session.execute(delete(Review).where(Review.card_id.in_(card_ids_subq)))
+    res_flags = await session.execute(delete(Flag).where(Flag.card_id.in_(card_ids_subq)))
+    res_card_translations = await session.execute(delete(CardTranslation).where(CardTranslation.card_id.in_(card_ids_subq)))
+
+    res_sessions = await session.execute(delete(StudySession).where(StudySession.deck_id == deck_id))
+    res_enroll = await session.execute(delete(Enrollment).where(Enrollment.deck_id == deck_id))
+
+    res_cards = await session.execute(delete(Card).where(Card.deck_id == deck_id))
+    res_deck = await session.execute(delete(Deck).where(Deck.id == deck_id))
+
+    await session.commit()
+
+    # SQLAlchemy's rowcount may be -1 on some dialects; normalize to 0 in that case.
+    def _rc(x) -> int:
+        try:
+            return int(getattr(x, "rowcount", 0) or 0)
+        except Exception:
+            return 0
+
+    return {
+        "reviews": _rc(res_reviews),
+        "flags": _rc(res_flags),
+        "card_translations": _rc(res_card_translations),
+        "sessions": _rc(res_sessions),
+        "enrollments": _rc(res_enroll),
+        "cards": _rc(res_cards),
+        "decks": _rc(res_deck),
+    }
+
+# --- Cards ---
+async def find_file_id_by_sha(session: AsyncSession, sha256: str) -> str | None:
+    res = await session.execute(select(Card.tg_file_id).where(Card.media_sha256 == sha256).limit(1))
+    row = res.first()
+    return row[0] if row else None
+
+async def insert_cards(session: AsyncSession, deck_id: str, cards: list[Card]) -> tuple[int,int]:
+    ok = 0
+    skipped = 0
+    for c in cards:
+        c.deck_id = deck_id
+        session.add(c)
+        try:
+            await session.flush()
+            ok += 1
+        except IntegrityError:
+            await session.rollback()
+            skipped += 1
+    await session.commit()
+    return ok, skipped
+
+async def get_card(session: AsyncSession, card_id: str) -> Card | None:
+    res = await session.execute(select(Card).where(Card.id == card_id))
+    return res.scalar_one_or_none()
+
+async def get_new_cards(session: AsyncSession, deck_id: str, user_id: str, limit: int) -> list[str]:
+    # Cards that have no review row for this user OR review.state == 'new'
+    subq = select(Review.card_id, Review.state).where(Review.user_id == user_id).subquery()
+    stmt = (
+        select(Card.id)
+        .where(Card.deck_id == deck_id, Card.is_valid == True)
+        .where(~Card.id.in_(select(subq.c.card_id).where(subq.c.state == 'suspended')))  # exclude suspended
+        .order_by(Card.created_at.asc())
+        .limit(limit)
+    )
+    res = await session.execute(stmt)
+    card_ids = []
+    for (cid,) in res.all():
+        # if review exists and not 'new', skip
+        r = await session.execute(select(Review).where(Review.user_id==user_id, Review.card_id==cid))
+        rv = r.scalar_one_or_none()
+        if rv is None or rv.state == "new":
+            card_ids.append(cid)
+    return card_ids
+
+# --- Users / Enrollment ---
+async def get_or_create_user(session: AsyncSession, tg_id: int) -> User:
+    res = await session.execute(select(User).where(User.tg_id == tg_id))
+    user = res.scalar_one_or_none()
+    if user:
+        return user
+    user = User(tg_id=tg_id)
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+async def enroll_user(session: AsyncSession, user_id: str, deck_id: str) -> None:
+    enr = Enrollment(user_id=user_id, deck_id=deck_id)
+    session.add(enr)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+
+async def is_enrolled(session: AsyncSession, user_id: str, deck_id: str) -> bool:
+    res = await session.execute(select(Enrollment.id).where(Enrollment.user_id==user_id, Enrollment.deck_id==deck_id))
+    return res.first() is not None
+
+# --- Reviews ---
+async def get_review(session: AsyncSession, user_id: str, card_id: str) -> Review | None:
+    res = await session.execute(select(Review).where(Review.user_id==user_id, Review.card_id==card_id))
+    return res.scalar_one_or_none()
+
+async def upsert_review(session: AsyncSession, review: Review) -> None:
+    session.add(review)
+    await session.commit()
+
+async def get_due_cards(session: AsyncSession, user_id: str, deck_id: str, now: datetime) -> list[str]:
+    # Join reviews -> cards to filter deck
+    stmt = (
+        select(Review.card_id)
+        .join(Card, Card.id == Review.card_id)
+        .where(
+            Review.user_id == user_id,
+            Card.deck_id == deck_id,
+            Review.state.in_(["learning","review"]),
+            Review.due_at.is_not(None),
+            Review.due_at <= now
+        )
+        .order_by(Review.due_at.asc())
+    )
+    res = await session.execute(stmt)
+    return [cid for (cid,) in res.all()]
+
+# --- Study Sessions ---
+async def get_today_session(session: AsyncSession, user_id: str, deck_id: str, study_date) -> StudySession | None:
+    res = await session.execute(
+        select(StudySession).where(
+            StudySession.user_id==user_id,
+            StudySession.deck_id==deck_id,
+            StudySession.study_date==study_date
+        )
+    )
+    return res.scalar_one_or_none()
+
+async def create_today_session(session: AsyncSession, user_id: str, deck_id: str, study_date, queue: list[str]) -> StudySession:
+    s = StudySession(
+        user_id=user_id,
+        deck_id=deck_id,
+        study_date=study_date,
+        queue=queue,
+        pos=0,
+        current_card_id=(queue[0] if queue else None),
+        updated_at=datetime.utcnow(),
+    )
+    session.add(s)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        # someone created it concurrently, fetch
+        existing = await get_today_session(session, user_id, deck_id, study_date)
+        if existing:
+            return existing
+        raise
+    await session.refresh(s)
+    return s
+
+async def update_session_progress(session: AsyncSession, session_id: str, pos: int, current_card_id: str | None) -> None:
+    await session.execute(
+        update(StudySession)
+        .where(StudySession.id == session_id)
+        .values(pos=pos, current_card_id=current_card_id, updated_at=datetime.utcnow())
+    )
+    await session.commit()
+
+async def update_session_queue(session: AsyncSession, session_id: str, queue: list[str], current_card_id: str | None) -> None:
+    await session.execute(
+        update(StudySession)
+        .where(StudySession.id == session_id)
+        .values(queue=queue, current_card_id=current_card_id, updated_at=datetime.utcnow())
+    )
+    await session.commit()
+
+# --- Flags ---
+async def add_flag(session: AsyncSession, user_id: str, card_id: str, reason: str="bad_card") -> None:
+    session.add(Flag(user_id=user_id, card_id=card_id, reason=reason))
+    await session.commit()
+
+async def export_flags(session: AsyncSession, deck_id: str) -> list[tuple[str,str,int]]:
+    # returns (note_guid, answer_text, count)
+    stmt = (
+        select(Card.note_guid, Card.answer_text, func.count(Flag.id))
+        .join(Flag, Flag.card_id == Card.id)
+        .where(Card.deck_id == deck_id)
+        .group_by(Card.note_guid, Card.answer_text)
+        .order_by(func.count(Flag.id).desc())
+        .limit(200)
+    )
+    res = await session.execute(stmt)
+    return [(a,b,int(c)) for (a,b,c) in res.all()]
+
+
+# --- Translations ---
+async def get_card_translation_uk(session: AsyncSession, card_id: str) -> str | None:
+    """Returns Ukrainian subtitle translation for a card, if available."""
+    stmt = (
+        select(TranslationCache.translated_text)
+        .join(CardTranslation, CardTranslation.cache_key == TranslationCache.key)
+        .where(CardTranslation.card_id == card_id)
+        .limit(1)
+    )
+    res = await session.execute(stmt)
+    row = res.first()
+    return row[0] if row else None
