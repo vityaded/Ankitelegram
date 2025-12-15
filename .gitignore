@@ -1,0 +1,18 @@
+# Environment files and virtual environments
+.env
+.env.*
+.venv/
+venv/
+ENV/
+
+# Python cache and bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local databases and runtime artifacts
+bot.db
+
+# System files
+.DS_Store
