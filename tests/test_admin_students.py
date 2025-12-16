@@ -121,6 +121,91 @@ async def test_unenroll_all_students_wipe_progress(sessionmaker):
 
 
 @pytest.mark.asyncio
+async def test_unenroll_student_wipe_progress_after_select_transaction(sessionmaker):
+    async with sessionmaker() as session:
+        deck = Deck(admin_tg_id=1, title="Deck", token="t1", new_per_day=10)
+        user = User(tg_id=100)
+        other_user = User(tg_id=200)
+        session.add_all([deck, user, other_user])
+        await session.commit()
+        await session.refresh(deck)
+        await session.refresh(user)
+        await session.refresh(other_user)
+
+        card = Card(deck_id=deck.id, note_guid="n1", answer_text="a1", alt_answers=[], media_kind="audio", tg_file_id="f1", media_sha256="s1")
+        session.add(card)
+        await session.commit()
+        await session.refresh(card)
+
+        session.add_all([
+            Enrollment(user_id=user.id, deck_id=deck.id),
+            Enrollment(user_id=other_user.id, deck_id=deck.id),
+            Review(user_id=user.id, card_id=card.id, state="learning"),
+            Review(user_id=other_user.id, card_id=card.id, state="review"),
+            StudySession(user_id=user.id, deck_id=deck.id, study_date=date.today(), queue=["c1"], pos=1),
+            Flag(user_id=user.id, card_id=card.id),
+            Flag(user_id=other_user.id, card_id=card.id),
+        ])
+        await session.commit()
+
+        await session.execute(select(User.id))
+        await unenroll_student_wipe_progress(session, user.id, deck.id)
+
+        assert (await session.execute(select(Enrollment).where(Enrollment.user_id == user.id, Enrollment.deck_id == deck.id))).first() is None
+        assert (await session.execute(select(Review).where(Review.user_id == user.id, Review.card_id == card.id))).first() is None
+        assert (await session.execute(select(StudySession).where(StudySession.user_id == user.id, StudySession.deck_id == deck.id))).first() is None
+        assert (await session.execute(select(Flag).where(Flag.user_id == user.id, Flag.card_id == card.id))).first() is None
+        assert (await session.execute(select(Enrollment).where(Enrollment.user_id == other_user.id, Enrollment.deck_id == deck.id))).first() is not None
+        assert (await session.execute(select(Review).where(Review.user_id == other_user.id, Review.card_id == card.id))).first() is not None
+        assert (await session.execute(select(Flag).where(Flag.user_id == other_user.id, Flag.card_id == card.id))).first() is not None
+
+
+@pytest.mark.asyncio
+async def test_unenroll_all_students_wipe_progress_after_select_transaction(sessionmaker):
+    async with sessionmaker() as session:
+        deck = Deck(admin_tg_id=1, title="Deck", token="t1", new_per_day=10)
+        other_deck = Deck(admin_tg_id=1, title="Deck2", token="t2", new_per_day=10)
+        user = User(tg_id=100)
+        other_user = User(tg_id=200)
+        session.add_all([deck, other_deck, user, other_user])
+        await session.commit()
+        await session.refresh(deck)
+        await session.refresh(other_deck)
+        await session.refresh(user)
+        await session.refresh(other_user)
+
+        card = Card(deck_id=deck.id, note_guid="n1", answer_text="a1", alt_answers=[], media_kind="audio", tg_file_id="f1", media_sha256="s1")
+        other_card = Card(deck_id=other_deck.id, note_guid="n2", answer_text="a2", alt_answers=[], media_kind="audio", tg_file_id="f2", media_sha256="s2")
+        session.add_all([card, other_card])
+        await session.commit()
+        await session.refresh(card)
+        await session.refresh(other_card)
+
+        session.add_all([
+            Enrollment(user_id=user.id, deck_id=deck.id),
+            Enrollment(user_id=other_user.id, deck_id=deck.id),
+            Enrollment(user_id=user.id, deck_id=other_deck.id),
+            Review(user_id=user.id, card_id=card.id, state="learning"),
+            Review(user_id=other_user.id, card_id=card.id, state="learning"),
+            Review(user_id=user.id, card_id=other_card.id, state="learning"),
+            StudySession(user_id=user.id, deck_id=deck.id, study_date=date.today(), queue=["c1"], pos=1),
+            Flag(user_id=user.id, card_id=card.id),
+            Flag(user_id=other_user.id, card_id=card.id),
+        ])
+        await session.commit()
+
+        await session.execute(select(User.id))
+        await unenroll_all_students_wipe_progress(session, deck.id)
+
+        assert (await session.execute(select(Enrollment).where(Enrollment.deck_id == deck.id))).first() is None
+        assert (await session.execute(select(Review).where(Review.card_id == card.id))).first() is None
+        assert (await session.execute(select(StudySession).where(StudySession.deck_id == deck.id))).first() is None
+        assert (await session.execute(select(Flag).where(Flag.card_id == card.id))).first() is None
+        assert (await session.execute(select(Enrollment).where(Enrollment.deck_id == other_deck.id))).first() is not None
+        assert (await session.execute(select(Review).where(Review.card_id == other_card.id))).first() is not None
+
+
+@pytest.mark.asyncio
 async def test_progress_history_and_overall(sessionmaker):
     async with sessionmaker() as session:
         deck = Deck(admin_tg_id=1, title="Deck", token="t1", new_per_day=10)

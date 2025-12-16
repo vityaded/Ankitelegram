@@ -369,7 +369,7 @@ async def compute_overall_progress(session: AsyncSession, user_id: str, deck_id:
 # --- Unenroll helpers ---
 async def unenroll_student_wipe_progress(session: AsyncSession, user_id: str, deck_id: str) -> None:
     card_ids_subq = select(Card.id).where(Card.deck_id == deck_id)
-    async with session.begin():
+    try:
         await session.execute(
             delete(StudySession).where(
                 StudySession.user_id == user_id,
@@ -394,14 +394,22 @@ async def unenroll_student_wipe_progress(session: AsyncSession, user_id: str, de
                 Enrollment.deck_id == deck_id,
             )
         )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
 
 async def unenroll_all_students_wipe_progress(session: AsyncSession, deck_id: str) -> None:
     card_ids_subq = select(Card.id).where(Card.deck_id == deck_id)
-    async with session.begin():
+    try:
         await session.execute(delete(StudySession).where(StudySession.deck_id == deck_id))
         await session.execute(delete(Flag).where(Flag.card_id.in_(card_ids_subq)))
         await session.execute(delete(Review).where(Review.card_id.in_(card_ids_subq)))
         await session.execute(delete(Enrollment).where(Enrollment.deck_id == deck_id))
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
 
 
 # --- Translations ---
