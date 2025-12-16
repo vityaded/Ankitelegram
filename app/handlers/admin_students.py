@@ -17,6 +17,7 @@ from app.services.student_progress import (
     get_overall_progress_summary,
     get_today_progress,
 )
+from app.utils.cbdata import pack_uuid, parse_uuid
 from app.utils.timez import now_tz, today_date
 
 router = Router()
@@ -78,7 +79,7 @@ async def _student_list_text(bot: Bot, session: AsyncSession, deck_title: str, d
             [
                 InlineKeyboardButton(
                     text=f"{name} ({today_done}/{today_total} today)",
-                    callback_data=f"ad_student:{deck_id}:{user.id}:{page}",
+                    callback_data=f"ad_student:{pack_uuid(deck_id)}:{pack_uuid(user.id)}:{page}",
                 )
             ]
         )
@@ -130,7 +131,9 @@ def _format_overall(overall: dict) -> str:
 
 @router.callback_query(F.data.startswith("ad_student:"))
 async def cb_ad_student_detail(call: CallbackQuery, session: AsyncSession, bot: Bot, settings):
-    _, deck_id, user_id, *rest = call.data.split(":", 3)
+    _, deck_id_raw, user_id_raw, *rest = call.data.split(":", 3)
+    deck_id = parse_uuid(deck_id_raw)
+    user_id = parse_uuid(user_id_raw)
     page = int(rest[0]) if rest else 0
     deck = await _ensure_deck_admin(call, session, settings, deck_id)
     if not deck:
@@ -162,7 +165,12 @@ async def cb_ad_student_detail(call: CallbackQuery, session: AsyncSession, bot: 
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Unenroll student", callback_data=f"ad_unenroll:{deck_id}:{user_id}")],
+            [
+                InlineKeyboardButton(
+                    text="Unenroll student",
+                    callback_data=f"ad_unenroll:{pack_uuid(deck_id)}:{pack_uuid(user_id)}",
+                )
+            ],
             [InlineKeyboardButton(text="Back", callback_data=f"ad_students:{deck_id}:{page}")],
         ]
     )
@@ -172,7 +180,9 @@ async def cb_ad_student_detail(call: CallbackQuery, session: AsyncSession, bot: 
 
 @router.callback_query(F.data.startswith("ad_unenroll:"))
 async def cb_ad_unenroll_confirm(call: CallbackQuery, session: AsyncSession, settings):
-    _, deck_id, user_id = call.data.split(":", 2)
+    _, deck_id_raw, user_id_raw = call.data.split(":", 2)
+    deck_id = parse_uuid(deck_id_raw)
+    user_id = parse_uuid(user_id_raw)
     deck = await _ensure_deck_admin(call, session, settings, deck_id)
     if not deck:
         return
@@ -182,7 +192,12 @@ async def cb_ad_unenroll_confirm(call: CallbackQuery, session: AsyncSession, set
     )
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Confirm", callback_data=f"ad_unenroll2:{deck_id}:{user_id}")],
+            [
+                InlineKeyboardButton(
+                    text="Confirm",
+                    callback_data=f"ad_unenroll2:{pack_uuid(deck_id)}:{pack_uuid(user_id)}",
+                )
+            ],
             [InlineKeyboardButton(text="Cancel", callback_data=f"ad_students:{deck_id}:0")],
         ]
     )
@@ -192,7 +207,9 @@ async def cb_ad_unenroll_confirm(call: CallbackQuery, session: AsyncSession, set
 
 @router.callback_query(F.data.startswith("ad_unenroll2:"))
 async def cb_ad_unenroll_do(call: CallbackQuery, session: AsyncSession, bot: Bot, settings):
-    _, deck_id, user_id = call.data.split(":", 2)
+    _, deck_id_raw, user_id_raw = call.data.split(":", 2)
+    deck_id = parse_uuid(deck_id_raw)
+    user_id = parse_uuid(user_id_raw)
     deck = await _ensure_deck_admin(call, session, settings, deck_id)
     if not deck:
         return
