@@ -16,10 +16,11 @@ def kb_study_more(deck_id: str) -> InlineKeyboardMarkup:
 
 def kb_admin_deck(deck_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Stats", callback_data=f"ad_stats:{deck_id}")],
+        [InlineKeyboardButton(text="Student list", callback_data=f"ad_students:{deck_id}:0")],
         [InlineKeyboardButton(text="Export bad cards", callback_data=f"ad_export:{deck_id}")],
         [InlineKeyboardButton(text="Set N/day", callback_data=f"ad_setn:{deck_id}")],
         [InlineKeyboardButton(text="Rotate link", callback_data=f"ad_rot:{deck_id}")],
+        [InlineKeyboardButton(text="Unenroll everyone", callback_data=f"ad_unenroll_all:{deck_id}")],
         [InlineKeyboardButton(text="Disable deck", callback_data=f"ad_dis:{deck_id}")],
         [InlineKeyboardButton(text="Delete deck", callback_data=f"ad_del:{deck_id}")],
     ])
