@@ -13,6 +13,7 @@ from app.logging_config import setup_logging
 from app.bot.factory import create_bot, create_dispatcher
 from app.db.engine import init_engine, get_sessionmaker
 from app.db.models import Base
+from app.db.migrations import run_migrations
 
 from app.utils.locks import LockRegistry
 
@@ -69,6 +70,7 @@ async def _init_db(database_url: str):
     engine = create_async_engine(database_url, echo=False, future=True)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(run_migrations)
     await engine.dispose()
 
 async def run_web(settings, bot: Bot, bot_username: str, sessionmaker):

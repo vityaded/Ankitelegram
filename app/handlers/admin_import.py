@@ -10,7 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.messages import admin_import_prompt, ask_new_per_day, invalid_number, deck_link
+from app.bot.messages import admin_import_prompt, ask_new_per_day, invalid_number
 from app.bot.keyboards import kb_admin_deck
 from app.db.repo import update_deck_new_per_day, get_deck_by_id
 from app.services.import_service import import_apkg_from_path
@@ -80,7 +80,11 @@ async def on_new_per_day(message: Message, settings, state: FSMContext, bot: Bot
         new_per_day=n,
     )
 
-    await message.answer(f"Imported: {res['imported']}, skipped: {res['skipped']}\nLink: {res['link']}")
+    await message.answer(
+        f"Imported: {res['imported']}, skipped: {res['skipped']}\n"
+        f"Anki mode: {res['links']['anki']}\n"
+        f"Watch mode: {res['links']['watch']}"
+    )
     await state.clear()
 
     try:

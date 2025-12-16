@@ -88,3 +88,116 @@ def apply_srs(
 
     # fallback
     return review
+
+
+def apply_srs_by_mode(
+    review: Review | None,
+    verdict: Verdict,
+    now_utc: datetime,
+    learning_steps_minutes: list[int],
+    graduate_days: int,
+    last_answer_raw: str,
+    last_score: int,
+    mode: str,
+    watch_target: int = 2,
+) -> Review:
+    m = (mode or "anki").lower()
+    if m != "watch":
+        return apply_srs(
+            review=review,
+            verdict=verdict,
+            now_utc=now_utc,
+            learning_steps_minutes=learning_steps_minutes,
+            graduate_days=graduate_days,
+            last_answer_raw=last_answer_raw,
+            last_score=last_score,
+        )
+
+    is_ok = verdict == Verdict.OK
+
+    if review is None:
+        if is_ok:
+            return Review(
+                state=ReviewState.suspended.value,
+                step_index=0,
+                ease=2.5,
+                interval_days=0,
+                lapses=0,
+                due_at=None,
+                last_answer_raw=last_answer_raw,
+                last_score=last_score,
+                watch_failed=False,
+                watch_streak=0,
+                updated_at=now_utc,
+            )
+
+        updated = apply_srs(
+            review=None,
+            verdict=verdict,
+            now_utc=now_utc,
+            learning_steps_minutes=learning_steps_minutes,
+            graduate_days=graduate_days,
+            last_answer_raw=last_answer_raw,
+            last_score=last_score,
+        )
+        updated.watch_failed = True
+        updated.watch_streak = 0
+        return updated
+
+    if review.state == ReviewState.suspended.value:
+        return review
+
+    has_failed = bool(getattr(review, "watch_failed", False))
+
+    if not has_failed:
+        if is_ok:
+            updated = apply_srs(
+                review=review,
+                verdict=verdict,
+                now_utc=now_utc,
+                learning_steps_minutes=learning_steps_minutes,
+                graduate_days=graduate_days,
+                last_answer_raw=last_answer_raw,
+                last_score=last_score,
+            )
+            updated.state = ReviewState.suspended.value
+            updated.due_at = None
+            updated.watch_failed = False
+            updated.watch_streak = 0
+            updated.updated_at = now_utc
+            return updated
+
+        updated = apply_srs(
+            review=review,
+            verdict=verdict,
+            now_utc=now_utc,
+            learning_steps_minutes=learning_steps_minutes,
+            graduate_days=graduate_days,
+            last_answer_raw=last_answer_raw,
+            last_score=last_score,
+        )
+        updated.watch_failed = True
+        updated.watch_streak = 0
+        return updated
+
+    updated = apply_srs(
+        review=review,
+        verdict=verdict,
+        now_utc=now_utc,
+        learning_steps_minutes=learning_steps_minutes,
+        graduate_days=graduate_days,
+        last_answer_raw=last_answer_raw,
+        last_score=last_score,
+    )
+
+    if is_ok:
+        updated.watch_streak = int(getattr(updated, "watch_streak", 0) or 0) + 1
+    else:
+        updated.watch_streak = 0
+
+    if updated.watch_streak >= watch_target:
+        updated.state = ReviewState.suspended.value
+        updated.due_at = None
+
+    updated.watch_failed = True
+    return updated

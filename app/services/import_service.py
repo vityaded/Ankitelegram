@@ -19,7 +19,7 @@ from app.services.translate_service import (
     get_or_create_translation_cache,
     link_card_translation,
 )
-from app.bot.messages import deck_link
+from app.bot.messages import deck_links
 
 
 async def import_apkg_from_path(
@@ -118,7 +118,7 @@ async def import_apkg_from_path(
                 continue
 
         await session.commit()
-        link = deck_link(bot_username, deck.token)
+        links = deck_links(bot_username, deck.token)
 
     # cleanup unpack dir
     try:
@@ -128,4 +128,4 @@ async def import_apkg_from_path(
     except Exception:
         pass
 
-    return {"imported": imported, "skipped": skipped, "link": link}
+    return {"imported": imported, "skipped": skipped, "links": links, "link": links["anki"]}

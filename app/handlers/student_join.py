@@ -22,10 +22,12 @@ router = Router()
 @router.message(CommandStart(deep_link=True))
 async def start_with_payload(message: Message, session: AsyncSession, settings, locks: LockRegistry, bot: Bot):
     payload = message.text.split(maxsplit=1)[1] if message.text and len(message.text.split()) > 1 else None
-    token = parse_payload(payload)
-    if not token:
+    parsed = parse_payload(payload)
+    if not parsed:
         await message.answer(deck_not_found())
         return
+
+    token, mode = parsed
 
     deck = await get_deck_by_token(session, token)
     if not deck:
@@ -46,7 +48,7 @@ async def start_with_payload(message: Message, session: AsyncSession, settings, 
     # which expires ORM objects; accessing user.id after rollback can trigger async
     # lazy-loading and crash with MissingGreenlet.
     user_id = user.id
-    await enroll_user(session, user_id, deck_id)
+    await enroll_user(session, user_id, deck_id, mode=mode)
 
     lock = locks.lock((user_id, deck_id))
     async with lock:

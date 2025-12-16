@@ -181,8 +181,8 @@ async def get_user_by_id(session: AsyncSession, user_id: str) -> User | None:
     res = await session.execute(select(User).where(User.id == user_id))
     return res.scalar_one_or_none()
 
-async def enroll_user(session: AsyncSession, user_id: str, deck_id: str) -> None:
-    enr = Enrollment(user_id=user_id, deck_id=deck_id)
+async def enroll_user(session: AsyncSession, user_id: str, deck_id: str, mode: str = "anki") -> None:
+    enr = Enrollment(user_id=user_id, deck_id=deck_id, mode=mode)
     session.add(enr)
     try:
         await session.commit()
@@ -192,6 +192,17 @@ async def enroll_user(session: AsyncSession, user_id: str, deck_id: str) -> None
 async def is_enrolled(session: AsyncSession, user_id: str, deck_id: str) -> bool:
     res = await session.execute(select(Enrollment.id).where(Enrollment.user_id==user_id, Enrollment.deck_id==deck_id))
     return res.first() is not None
+
+
+async def get_enrollment_mode(session: AsyncSession, user_id: str, deck_id: str) -> str:
+    res = await session.execute(
+        select(Enrollment.mode).where(Enrollment.user_id == user_id, Enrollment.deck_id == deck_id)
+    )
+    mode = res.scalar_one_or_none()
+    if not mode:
+        return "anki"
+    mode = (mode or "anki").lower()
+    return mode if mode in ("anki", "watch") else "anki"
 
 async def list_enrolled_students(session: AsyncSession, deck_id: str, offset: int = 0, limit: int = 10) -> list[User]:
     stmt = (

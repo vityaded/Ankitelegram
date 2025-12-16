@@ -3,7 +3,10 @@
 ## What it does
 - Admin uploads an `.apkg` (video/audio on front, subtitle text on back).
 - Bot imports, caches Telegram `file_id`, asks admin only `new_per_day`.
-- Bot returns student link: `t.me/<bot>?start=deck_<token>`
+- Bot returns student links:
+  - Anki mode (spaced repetition): `t.me/<bot>?start=deck.anki.<token>`
+  - Watch mode (one-and-done until first mistake): `t.me/<bot>?start=deck.watch.<token>`
+  - Legacy links still work: `t.me/<bot>?start=deck_<token>` enrolls in anki mode
 - Student flow: open deck link -> media is sent immediately -> type answer -> immediate compare -> auto-next in 1 second.
 - Daily: at 07:00 (TZ), bot sends the first card for each enrolled deck.
 - When finished: "It's all for today" + button **Study more**.
