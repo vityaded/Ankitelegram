@@ -12,21 +12,32 @@ def build_payload(deck_token: str, mode: str = "anki") -> str:
     m = (mode or "anki").lower()
     if m not in VALID_MODES:
         m = "anki"
-    return f"deck.{m}.{deck_token}"
+    # Telegram deep-link safe: only [A-Za-z0-9_-]
+    # anki keeps legacy format
+    if m == "watch":
+        return f"deckw_{deck_token}"
+    return f"deck_{deck_token}"
 
 
 def parse_payload(payload: str | None) -> tuple[str, str] | None:
     if not payload:
         return None
+    # NEW watch format
+    if payload.startswith("deckw_"):
+        token = payload[len("deckw_"):]
+        return (token, "watch") if token else None
+
+    # Legacy / anki format (keep working forever)
     if payload.startswith("deck_"):
-        return payload[len("deck_"):], "anki"
-    if payload.startswith("deck."):
-        parts = payload.split(".", 2)
-        if len(parts) != 3:
-            return None
-        mode = parts[1].lower()
-        token = parts[2]
-        if mode not in VALID_MODES or not token:
-            return None
-        return token, mode
+        token = payload[len("deck_"):]
+        return (token, "anki") if token else None
+
+    # Optional: accept old dot format if user manually types it (deep-link won’t send it)
+    if payload.startswith("deck.watch."):
+        token = payload[len("deck.watch."):]
+        return (token, "watch") if token else None
+    if payload.startswith("deck.anki."):
+        token = payload[len("deck.anki."):]
+        return (token, "anki") if token else None
+
     return None

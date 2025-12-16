@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 
 from app.bot.messages import start_message
 from app.bot.keyboards import kb_admin_home
+from app.services.token_service import parse_payload
 
 router = Router()
 
@@ -19,7 +20,8 @@ def _get_start_payload(message: Message) -> str:
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext, settings, bot_username: str):
     # Deep-link /start payloads are handled elsewhere
-    if _get_start_payload(message):
+    payload = _get_start_payload(message)
+    if payload and parse_payload(payload):
         return
 
     # Admin menu (if ADMIN_IDS set; if empty -> everyone is admin)

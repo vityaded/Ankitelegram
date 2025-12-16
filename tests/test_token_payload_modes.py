@@ -6,6 +6,10 @@ def test_legacy_payload():
 
 
 def test_new_payloads():
+    assert parse_payload("deckw_ABC") == ("ABC", "watch")
+
+
+def test_dot_payloads():
     assert parse_payload("deck.anki.ABC") == ("ABC", "anki")
     assert parse_payload("deck.watch.ABC") == ("ABC", "watch")
 
