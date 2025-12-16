@@ -14,12 +14,22 @@ from app.utils.locks import LockRegistry
 from app.utils.timez import today_date
 from app.bot.messages import no_cards_today, done_today, need_today_first
 from app.bot.keyboards import kb_bad_card, kb_study_more
-from app.db.repo import get_or_create_user, get_deck_by_id, is_enrolled, get_card, get_review, upsert_review, get_today_session, get_card_translation_uk
+from app.db.repo import (
+    get_or_create_user,
+    get_deck_by_id,
+    get_enrollment_mode,
+    is_enrolled,
+    get_card,
+    get_review,
+    upsert_review,
+    get_today_session,
+    get_card_translation_uk,
+)
 from app.db.models import StudySession
 from app.services.study_engine import ensure_current_card, extend_today_with_more, record_answered_card, start_or_resume_today
 from app.services.grader import grade
 from app.services.comparer import format_compare
-from app.services.srs import apply_srs
+from app.services.srs import apply_srs_by_mode
 from app.services.card_sender import send_card_to_chat
 
 router = Router()
@@ -121,7 +131,8 @@ async def on_answer(message: Message, session: AsyncSession, settings, locks: Lo
             almost=settings.similarity_almost,
         )
 
-        updated = apply_srs(
+        mode = await get_enrollment_mode(session, user.id, deck_id)
+        updated = apply_srs_by_mode(
             review=review,
             verdict=gr.verdict,
             now_utc=now_utc,
@@ -129,6 +140,8 @@ async def on_answer(message: Message, session: AsyncSession, settings, locks: Lo
             graduate_days=settings.learning_graduate_days,
             last_answer_raw=message.text,
             last_score=gr.score,
+            mode=mode,
+            watch_target=2,
         )
         updated.user_id = user.id
         updated.card_id = card.id

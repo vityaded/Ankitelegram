@@ -16,8 +16,19 @@ def ask_new_per_day() -> str:
 def invalid_number() -> str:
     return "Please send a valid integer number."
 
-def deck_link(bot_username: str, deck_token: str) -> str:
-    return f"https://t.me/{bot_username}?start=deck_{deck_token}"
+from app.services.token_service import build_payload
+
+
+def deck_link(bot_username: str, deck_token: str, mode: str = "anki") -> str:
+    payload = build_payload(deck_token, mode=mode)
+    return f"https://t.me/{bot_username}?start={payload}"
+
+
+def deck_links(bot_username: str, deck_token: str) -> dict[str, str]:
+    return {
+        "anki": deck_link(bot_username, deck_token, "anki"),
+        "watch": deck_link(bot_username, deck_token, "watch"),
+    }
 
 def join_ok(deck_title: str) -> str:
     return f"Joined deck: {deck_title}"

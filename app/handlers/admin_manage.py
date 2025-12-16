@@ -8,7 +8,7 @@ from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards import kb_admin_deck, kb_admin_deck_list
-from app.bot.messages import deck_link, invalid_number
+from app.bot.messages import deck_links, invalid_number
 from app.db.repo import get_deck_by_id, export_flags, rotate_deck_token, set_deck_active, update_deck_new_per_day, list_admin_decks, list_all_decks, delete_deck_full
 from app.services.stats_service import admin_stats
 
@@ -59,8 +59,11 @@ async def cb_ad_rotate(call: CallbackQuery, session: AsyncSession, bot_username:
         await call.answer("Not allowed", show_alert=True)
         return
     token = await rotate_deck_token(session, deck_id)
-    link = deck_link(bot_username, token)
-    await call.message.answer(f"New link: {link}", reply_markup=kb_admin_deck(deck_id))
+    links = deck_links(bot_username, token)
+    await call.message.answer(
+        f"New Anki link: {links['anki']}\nNew Watch link: {links['watch']}",
+        reply_markup=kb_admin_deck(deck_id),
+    )
     await call.answer()
 
 @router.callback_query(F.data.startswith("ad_dis:"))
@@ -141,8 +144,15 @@ async def cb_ad_open(call: CallbackQuery, session: AsyncSession, bot_username: s
     if not settings.admin_ids and deck.admin_tg_id != call.from_user.id:
         await call.answer("Not allowed", show_alert=True)
         return
-    link = deck_link(bot_username, deck.token)
-    await call.message.answer(f"{deck.title}\n{link}", reply_markup=kb_admin_deck(deck_id))
+    links = deck_links(bot_username, deck.token)
+    await call.message.answer(
+        f"{deck.title}\n"
+        f"Anki mode: {links['anki']}\n"
+        f"Watch mode: {links['watch']}\n"
+        f"N/day: {deck.new_per_day}\n"
+        f"Active: {deck.is_active}",
+        reply_markup=kb_admin_deck(deck_id),
+    )
     await call.answer()
 
 @router.callback_query(F.data == "ad_close")

@@ -26,6 +26,11 @@ class ReviewState(str, enum.Enum):
     review = "review"
     suspended = "suspended"
 
+
+class StudyMode(str, enum.Enum):
+    anki = "anki"
+    watch = "watch"
+
 class Deck(Base):
     __tablename__ = "decks"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -71,6 +76,7 @@ class Enrollment(Base):
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     deck_id: Mapped[str] = mapped_column(String(36), ForeignKey("decks.id", ondelete="CASCADE"), nullable=False)
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False, default=StudyMode.anki.value)
 
 class Review(Base):
     __tablename__ = "reviews"
@@ -88,6 +94,8 @@ class Review(Base):
     last_answer_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    watch_failed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    watch_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 class StudySession(Base):
     __tablename__ = "study_sessions"

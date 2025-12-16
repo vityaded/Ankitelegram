@@ -123,7 +123,12 @@ def create_web_app(
                     deck_title=deck_title,
                     new_per_day=new_per_day,
                 )
-                await bot.send_message(td.admin_id, f"Imported: {res['imported']}, skipped: {res['skipped']}\nLink: {res['link']}")
+                await bot.send_message(
+                    td.admin_id,
+                    f"Imported: {res['imported']}, skipped: {res['skipped']}\n"
+                    f"Anki mode: {res['links']['anki']}\n"
+                    f"Watch mode: {res['links']['watch']}",
+                )
             except Exception as e:
                 await bot.send_message(td.admin_id, f"Import failed: {type(e).__name__}: {e}")
             finally:
