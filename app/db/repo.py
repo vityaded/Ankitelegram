@@ -177,6 +177,10 @@ async def get_or_create_user(session: AsyncSession, tg_id: int) -> User:
     await session.refresh(user)
     return user
 
+async def get_user_by_id(session: AsyncSession, user_id: str) -> User | None:
+    res = await session.execute(select(User).where(User.id == user_id))
+    return res.scalar_one_or_none()
+
 async def enroll_user(session: AsyncSession, user_id: str, deck_id: str) -> None:
     enr = Enrollment(user_id=user_id, deck_id=deck_id)
     session.add(enr)
@@ -188,6 +192,22 @@ async def enroll_user(session: AsyncSession, user_id: str, deck_id: str) -> None
 async def is_enrolled(session: AsyncSession, user_id: str, deck_id: str) -> bool:
     res = await session.execute(select(Enrollment.id).where(Enrollment.user_id==user_id, Enrollment.deck_id==deck_id))
     return res.first() is not None
+
+async def list_enrolled_students(session: AsyncSession, deck_id: str, offset: int = 0, limit: int = 10) -> list[User]:
+    stmt = (
+        select(User)
+        .join(Enrollment, Enrollment.user_id == User.id)
+        .where(Enrollment.deck_id == deck_id)
+        .order_by(Enrollment.joined_at.asc())
+        .offset(offset)
+        .limit(limit)
+    )
+    res = await session.execute(stmt)
+    return list(res.scalars().all())
+
+async def count_enrolled_students(session: AsyncSession, deck_id: str) -> int:
+    res = await session.execute(select(func.count(Enrollment.id)).where(Enrollment.deck_id == deck_id))
+    return int(res.scalar() or 0)
 
 # --- Reviews ---
 async def get_review(session: AsyncSession, user_id: str, card_id: str) -> Review | None:
@@ -225,6 +245,20 @@ async def get_today_session(session: AsyncSession, user_id: str, deck_id: str, s
         )
     )
     return res.scalar_one_or_none()
+
+async def get_study_sessions_for_user_deck_in_range(session: AsyncSession, user_id: str, deck_id: str, date_from, date_to) -> list[StudySession]:
+    stmt = (
+        select(StudySession)
+        .where(
+            StudySession.user_id == user_id,
+            StudySession.deck_id == deck_id,
+            StudySession.study_date >= date_from,
+            StudySession.study_date <= date_to,
+        )
+        .order_by(StudySession.study_date.asc())
+    )
+    res = await session.execute(stmt)
+    return list(res.scalars().all())
 
 async def create_today_session(session: AsyncSession, user_id: str, deck_id: str, study_date, queue: list[str]) -> StudySession:
     s = StudySession(
@@ -293,6 +327,81 @@ async def export_flags(session: AsyncSession, deck_id: str) -> list[tuple[str,st
     )
     res = await session.execute(stmt)
     return [(a,b,int(c)) for (a,b,c) in res.all()]
+
+
+# --- Admin progress helpers ---
+async def compute_overall_progress(session: AsyncSession, user_id: str, deck_id: str, now: datetime | None = None) -> dict:
+    """Return deck-level progress summary for a user."""
+    now = now or datetime.utcnow()
+    total_cards_res = await session.execute(select(func.count(Card.id)).where(Card.deck_id == deck_id))
+    total_cards = int(total_cards_res.scalar() or 0)
+
+    state_rows = await session.execute(
+        select(Review.state, func.count(Review.card_id))
+        .join(Card, Card.id == Review.card_id)
+        .where(Review.user_id == user_id, Card.deck_id == deck_id)
+        .group_by(Review.state)
+    )
+    state_counts = {state: int(count) for state, count in state_rows.all()}
+    started = sum(state_counts.values())
+
+    due_res = await session.execute(
+        select(func.count(Review.card_id))
+        .join(Card, Card.id == Review.card_id)
+        .where(
+            Review.user_id == user_id,
+            Card.deck_id == deck_id,
+            Review.state.in_(["learning", "review"]),
+            Review.due_at.is_not(None),
+            Review.due_at <= now,
+        )
+    )
+    due_count = int(due_res.scalar() or 0)
+
+    return {
+        "total_cards": total_cards,
+        "started": started,
+        "states": state_counts,
+        "due": due_count,
+    }
+
+
+# --- Unenroll helpers ---
+async def unenroll_student_wipe_progress(session: AsyncSession, user_id: str, deck_id: str) -> None:
+    card_ids_subq = select(Card.id).where(Card.deck_id == deck_id)
+    async with session.begin():
+        await session.execute(
+            delete(StudySession).where(
+                StudySession.user_id == user_id,
+                StudySession.deck_id == deck_id,
+            )
+        )
+        await session.execute(
+            delete(Flag).where(
+                Flag.user_id == user_id,
+                Flag.card_id.in_(card_ids_subq),
+            )
+        )
+        await session.execute(
+            delete(Review).where(
+                Review.user_id == user_id,
+                Review.card_id.in_(card_ids_subq),
+            )
+        )
+        await session.execute(
+            delete(Enrollment).where(
+                Enrollment.user_id == user_id,
+                Enrollment.deck_id == deck_id,
+            )
+        )
+
+async def unenroll_all_students_wipe_progress(session: AsyncSession, deck_id: str) -> None:
+    card_ids_subq = select(Card.id).where(Card.deck_id == deck_id)
+    async with session.begin():
+        await session.execute(delete(StudySession).where(StudySession.deck_id == deck_id))
+        await session.execute(delete(Flag).where(Flag.card_id.in_(card_ids_subq)))
+        await session.execute(delete(Review).where(Review.card_id.in_(card_ids_subq)))
+        await session.execute(delete(Enrollment).where(Enrollment.deck_id == deck_id))
 
 
 # --- Translations ---

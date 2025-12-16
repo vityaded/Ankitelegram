@@ -7,6 +7,7 @@ from app.handlers.student_join import router as student_join_router
 from app.handlers.common import router as common_router
 from app.handlers.admin_import import router as admin_import_router
 from app.handlers.admin_manage import router as admin_manage_router
+from app.handlers.admin_students import router as admin_students_router
 from app.handlers.student_study import router as student_study_router
 from app.handlers.callbacks import router as callbacks_router
 
@@ -21,6 +22,7 @@ def create_dispatcher() -> Dispatcher:
 
     dp.include_router(admin_import_router)
     dp.include_router(admin_manage_router)
+    dp.include_router(admin_students_router)
     dp.include_router(student_study_router)
     dp.include_router(callbacks_router)
     return dp

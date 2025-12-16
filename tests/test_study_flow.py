@@ -7,25 +7,10 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 import pytest
-import pytest_asyncio
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-
-from app.db.models import Base, Deck, Card, User, Review
+from app.db.models import Deck, Card, User, Review
 from app.services.study_engine import ensure_current_card, record_answered_card
 from app.services.scheduler import _run_due_learning_push_once
 from app.db.repo import create_today_session, get_today_session, update_session_progress
-
-
-@pytest_asyncio.fixture()
-async def sessionmaker():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    maker = async_sessionmaker(bind=engine, expire_on_commit=False)
-    try:
-        yield maker
-    finally:
-        await engine.dispose()
 
 
 async def _seed_basic(session):
