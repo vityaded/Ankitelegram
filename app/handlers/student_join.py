@@ -14,7 +14,7 @@ from app.bot.keyboards import kb_study_more
 from app.db.repo import get_deck_by_token, get_or_create_user, enroll_user, get_card
 from app.utils.locks import LockRegistry
 from app.utils.timez import today_date
-from app.services.study_engine import start_or_resume_today
+from app.services.study_engine import ensure_current_card, start_or_resume_today
 from app.services.card_sender import send_card_to_chat
 
 router = Router()
@@ -53,12 +53,13 @@ async def start_with_payload(message: Message, session: AsyncSession, settings, 
         now_utc = datetime.utcnow()
         sdate = today_date(settings.tz)
         sess, _created = await start_or_resume_today(session, user_id, deck_id, sdate, now_utc)
+        cid = await ensure_current_card(session, user_id, deck_id, sdate, now_utc)
 
-        if not getattr(sess, "queue", None) or not sess.current_card_id:
+        if not getattr(sess, "queue", None) or not cid:
             await message.answer(done_today(), reply_markup=kb_study_more(deck_id))
             return
 
-        card = await get_card(session, sess.current_card_id)
+        card = await get_card(session, cid)
         if not card:
             await message.answer(done_today(), reply_markup=kb_study_more(deck_id))
             return

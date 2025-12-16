@@ -131,6 +131,40 @@ async def get_new_cards(session: AsyncSession, deck_id: str, user_id: str, limit
             card_ids.append(cid)
     return card_ids
 
+async def get_due_learning_cards(session: AsyncSession, user_id: str, deck_id: str, now: datetime, limit: int = 1) -> list[str]:
+    stmt = (
+        select(Review.card_id)
+        .join(Card, Card.id == Review.card_id)
+        .where(
+            Review.user_id == user_id,
+            Card.deck_id == deck_id,
+            Review.state == "learning",
+            Review.due_at.is_not(None),
+            Review.due_at <= now,
+        )
+        .order_by(Review.due_at.asc())
+        .limit(limit)
+    )
+    res = await session.execute(stmt)
+    return [cid for (cid,) in res.all()]
+
+async def get_due_review_cards(session: AsyncSession, user_id: str, deck_id: str, now: datetime, limit: int = 50) -> list[str]:
+    stmt = (
+        select(Review.card_id)
+        .join(Card, Card.id == Review.card_id)
+        .where(
+            Review.user_id == user_id,
+            Card.deck_id == deck_id,
+            Review.state == "review",
+            Review.due_at.is_not(None),
+            Review.due_at <= now,
+        )
+        .order_by(Review.due_at.asc())
+        .limit(limit)
+    )
+    res = await session.execute(stmt)
+    return [cid for (cid,) in res.all()]
+
 # --- Users / Enrollment ---
 async def get_or_create_user(session: AsyncSession, tg_id: int) -> User:
     res = await session.execute(select(User).where(User.tg_id == tg_id))
@@ -199,7 +233,7 @@ async def create_today_session(session: AsyncSession, user_id: str, deck_id: str
         study_date=study_date,
         queue=queue,
         pos=0,
-        current_card_id=(queue[0] if queue else None),
+        current_card_id=None,
         updated_at=datetime.utcnow(),
     )
     session.add(s)
@@ -230,6 +264,17 @@ async def update_session_queue(session: AsyncSession, session_id: str, queue: li
         .values(queue=queue, current_card_id=current_card_id, updated_at=datetime.utcnow())
     )
     await session.commit()
+
+async def claim_current_if_none(session: AsyncSession, session_id: str, card_id: str) -> bool:
+    res = await session.execute(
+        update(StudySession)
+        .where(StudySession.id == session_id, StudySession.current_card_id.is_(None))
+        .values(current_card_id=card_id, updated_at=datetime.utcnow())
+        .returning(StudySession.id)
+    )
+    row = res.first()
+    await session.commit()
+    return row is not None
 
 # --- Flags ---
 async def add_flag(session: AsyncSession, user_id: str, card_id: str, reason: str="bad_card") -> None:

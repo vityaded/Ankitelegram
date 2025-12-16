@@ -18,7 +18,7 @@ from app.utils.locks import LockRegistry
 
 import uvicorn
 from app.web.app import create_web_app
-from app.services.scheduler import run_daily_7am_push
+from app.services.scheduler import run_daily_7am_push, run_due_learning_push
 
 logger = logging.getLogger("app.main")
 
@@ -108,6 +108,7 @@ async def main():
         dp.start_polling(bot),
         run_web(settings, bot, bot_username, sessionmaker),
         run_daily_7am_push(bot=bot, settings=settings, sessionmaker=sessionmaker),
+        run_due_learning_push(bot=bot, settings=settings, sessionmaker=sessionmaker),
     )
 
 if __name__ == "__main__":

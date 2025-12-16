@@ -5,15 +5,22 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from aiogram import Bot
 
 from app.utils.timez import today_date
 from app.db.models import Enrollment, User, Deck, StudySession
-from app.services.study_engine import start_or_resume_today
-from app.db.repo import get_card
+from app.services.study_engine import ensure_current_card, start_or_resume_today
+from app.db.repo import (
+    claim_current_if_none,
+    get_card,
+    get_due_learning_cards,
+    update_session_progress,
+    get_today_session,
+)
 from app.services.card_sender import send_card_to_chat
+
 
 async def _sleep_until_next_7am(tz_name: str) -> None:
     tz = ZoneInfo(tz_name)
@@ -25,6 +32,7 @@ async def _sleep_until_next_7am(tz_name: str) -> None:
     if delta < 1:
         delta = 1
     await asyncio.sleep(delta)
+
 
 async def run_daily_7am_push(
     *,
@@ -42,6 +50,7 @@ async def run_daily_7am_push(
     while True:
         await _sleep_until_next_7am(settings.tz)
         await push_today_cards(bot=bot, settings=settings, sessionmaker=sessionmaker)
+
 
 async def push_today_cards(*, bot: Bot, settings, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     now_utc = datetime.utcnow()
@@ -62,23 +71,11 @@ async def push_today_cards(*, bot: Bot, settings, sessionmaker: async_sessionmak
     for tg_id, user_id, deck_id in rows:
         try:
             async with sessionmaker() as s:
-                # Only if today's session doesn't exist yet -> create and send first card
-                existing = await s.execute(
-                    select(StudySession.id).where(
-                        StudySession.user_id == user_id,
-                        StudySession.deck_id == deck_id,
-                        StudySession.study_date == sdate
-                    )
-                )
-                if existing.first() is not None:
+                sess, _created = await start_or_resume_today(s, user_id, deck_id, sdate, now_utc)
+                cid = await ensure_current_card(s, user_id, deck_id, sdate, now_utc)
+                if not getattr(sess, "queue", None) or not cid:
                     continue
 
-                sess, _created = await start_or_resume_today(s, user_id, deck_id, sdate, now_utc)
-                if not getattr(sess, "queue", None):
-                    continue
-                cid = sess.current_card_id
-                if not cid:
-                    continue
                 card = await get_card(s, cid)
                 if not card:
                     continue
@@ -89,3 +86,68 @@ async def push_today_cards(*, bot: Bot, settings, sessionmaker: async_sessionmak
         except Exception:
             # user blocked bot / network error / etc -> ignore
             continue
+
+
+async def run_due_learning_push(
+    *,
+    bot: Bot,
+    settings,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    interval_seconds: int = 45,
+    send_card_fn=send_card_to_chat,
+):
+    while True:
+        try:
+            await _run_due_learning_push_once(bot=bot, settings=settings, sessionmaker=sessionmaker, send_card_fn=send_card_fn)
+        except Exception:
+            # swallow errors to keep loop alive
+            pass
+        await asyncio.sleep(interval_seconds)
+
+
+async def _run_due_learning_push_once(
+    *,
+    bot: Bot,
+    settings,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    send_card_fn=send_card_to_chat,
+):
+    now_utc = datetime.utcnow()
+    sdate = today_date(settings.tz)
+
+    async with sessionmaker() as session:
+        stmt = (
+            select(StudySession)
+            .where(
+                StudySession.study_date == sdate,
+                StudySession.current_card_id.is_(None),
+                StudySession.pos >= func.json_array_length(StudySession.queue),
+            )
+        )
+        sessions = (await session.execute(stmt)).scalars().all()
+
+    for sess in sessions:
+        async with sessionmaker() as s:
+            # Re-fetch to ensure we have fresh state inside transaction
+            current = await get_today_session(s, sess.user_id, sess.deck_id, sdate)
+            if not current or current.current_card_id is not None:
+                continue
+            queue = current.queue or []
+            if current.pos < len(queue):
+                continue
+
+            due_learning = await get_due_learning_cards(s, current.user_id, current.deck_id, now_utc, limit=1)
+            if not due_learning:
+                continue
+            cid = due_learning[0]
+            claimed = await claim_current_if_none(s, current.id, cid)
+            if not claimed:
+                continue
+
+            card = await get_card(s, cid)
+            if not card:
+                await update_session_progress(s, current.id, current.pos, None)
+                continue
+
+            tg_id = (await s.execute(select(User.tg_id).where(User.id == current.user_id))).scalar_one()
+            await send_card_fn(bot, tg_id, card, current.deck_id)
