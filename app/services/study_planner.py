@@ -2,20 +2,26 @@ from __future__ import annotations
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.repo import get_due_cards, get_new_cards
+from app.db.repo import get_new_cards, get_due_review_cards
 from app.db.repo import get_deck_by_id
+
+
+def _dedupe_preserve_order(ids: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for cid in ids:
+        if cid in seen:
+            continue
+        seen.add(cid)
+        out.append(cid)
+    return out
+
 
 async def build_today_queue(session: AsyncSession, user_id: str, deck_id: str, now_utc: datetime) -> list[str]:
     deck = await get_deck_by_id(session, deck_id)
     if deck is None:
         return []
-    due = await get_due_cards(session, user_id, deck_id, now_utc)
+    due_review = await get_due_review_cards(session, user_id, deck_id, now_utc, limit=50)
     new = await get_new_cards(session, deck_id, user_id, deck.new_per_day)
-    # avoid duplicates
-    seen = set()
-    queue: list[str] = []
-    for cid in due + new:
-        if cid not in seen:
-            seen.add(cid)
-            queue.append(cid)
+    queue = _dedupe_preserve_order(due_review + new)
     return queue

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery
 
@@ -13,10 +15,11 @@ from app.bot.keyboards import kb_study_more
 from app.db.repo import get_or_create_user, get_today_session, get_card
 from app.db.models import StudySession
 from app.services.flag_service import flag_bad_card
-from app.services.study_engine import advance
+from app.services.study_engine import ensure_current_card, record_answered_card
 from app.services.card_sender import send_card_to_chat
 
 router = Router()
+
 
 @router.callback_query(F.data.startswith("bad:"))
 async def cb_bad_card(call: CallbackQuery, session: AsyncSession, settings, locks: LockRegistry, bot: Bot):
@@ -56,17 +59,16 @@ async def cb_bad_card(call: CallbackQuery, session: AsyncSession, settings, lock
             await call.answer()
             return
 
-        new_pos, new_current = await advance(session, sess2.id, sess2.queue, sess2.pos)
-        if not new_current:
+        await record_answered_card(session, sess2, card_id)
+        next_id = await ensure_current_card(session, user.id, deck_id, sdate, datetime.utcnow())
+        if not next_id:
             await call.message.answer(done_today(), reply_markup=kb_study_more(deck_id))
             await call.answer()
             return
-
-        next_card = await get_card(session, new_current)
+        next_card = await get_card(session, next_id)
         if not next_card:
             await call.message.answer(done_today(), reply_markup=kb_study_more(deck_id))
             await call.answer()
             return
-
         await send_card_to_chat(bot, call.message.chat.id, next_card, deck_id)
         await call.answer()
