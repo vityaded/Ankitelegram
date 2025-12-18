@@ -26,7 +26,7 @@ def kb_admin_deck(deck_id: str) -> InlineKeyboardMarkup:
     ])
 
 
-def kb_admin_deck_list(items: list[tuple[str, str, bool]]) -> InlineKeyboardMarkup:
+def kb_admin_deck_list(items: list[tuple[str, str, bool]], back_callback: str | None = None) -> InlineKeyboardMarkup:
     """items: (deck_id, title, is_active)"""
     rows = []
     for deck_id, title, is_active in items:
@@ -35,6 +35,18 @@ def kb_admin_deck_list(items: list[tuple[str, str, bool]]) -> InlineKeyboardMark
             InlineKeyboardButton(text=f"{status} {title[:40]}", callback_data=f"ad_open:{deck_id}"),
             InlineKeyboardButton(text="🗑", callback_data=f"ad_del:{deck_id}"),
         ])
+    if back_callback:
+        rows.append([InlineKeyboardButton(text="⬅️ Back", callback_data=back_callback)])
+    rows.append([InlineKeyboardButton(text="Close", callback_data="ad_close")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_admin_folder_root(folders: list[tuple[str, str]], ungrouped_count: int) -> InlineKeyboardMarkup:
+    rows = []
+    for folder_id, path in folders:
+        rows.append([InlineKeyboardButton(text=f"📁 {path[:48]}", callback_data=f"adm_folder:{folder_id}")])
+    if ungrouped_count:
+        rows.append([InlineKeyboardButton(text=f"Ungrouped decks ({ungrouped_count})", callback_data="adm_ungrouped")])
     rows.append([InlineKeyboardButton(text="Close", callback_data="ad_close")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -42,6 +54,6 @@ def kb_admin_home(settings, admin_id: int) -> InlineKeyboardMarkup:
     tok = make_upload_token(settings.upload_secret, admin_id, ttl_seconds=3600)
     url = f"{settings.web_base_url}/upload?token={tok}"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="All decks", callback_data="ad_list")],
+        [InlineKeyboardButton(text="All decks", callback_data="adm_decks_root")],
         [InlineKeyboardButton(text="Upload deck (large)", url=url)],
 ])

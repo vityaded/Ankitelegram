@@ -36,12 +36,25 @@ class Deck(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     admin_tg_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
+    folder_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("deck_folders.id", ondelete="SET NULL"), nullable=True)
     token: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     new_per_day: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
 
+    folder: Mapped["DeckFolder | None"] = relationship(back_populates="decks")
     cards: Mapped[list["Card"]] = relationship(back_populates="deck", cascade="all, delete-orphan")
+
+
+class DeckFolder(Base):
+    __tablename__ = "deck_folders"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    admin_tg_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    path: Mapped[str] = mapped_column(String(512), nullable=False)
+
+    __table_args__ = (UniqueConstraint("admin_tg_id", "path", name="uq_folder_admin_path"),)
+
+    decks: Mapped[list[Deck]] = relationship(back_populates="folder")
 
 class Card(Base):
     __tablename__ = "cards"

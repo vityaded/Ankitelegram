@@ -80,8 +80,10 @@ async def on_new_per_day(message: Message, settings, state: FSMContext, bot: Bot
         new_per_day=n,
     )
 
+    folder_line = f"\nFolder: {res['folder_path']}" if res.get("folder_path") else ""
     await message.answer(
         f"Imported: {res['imported']}, skipped: {res['skipped']}\n"
+        f"Deck: {deck_title}{folder_line}\n"
         f"Anki mode: {res['links']['anki']}\n"
         f"Watch mode: {res['links']['watch']}"
     )

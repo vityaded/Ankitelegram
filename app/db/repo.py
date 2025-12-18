@@ -6,14 +6,20 @@ from sqlalchemy import select, update, delete, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Deck, Card, User, Enrollment, Review, StudySession, Flag, CardTranslation, TranslationCache
+from app.db.models import Deck, Card, User, Enrollment, Review, StudySession, Flag, CardTranslation, TranslationCache, DeckFolder
 
 def _new_token() -> str:
     return secrets.token_urlsafe(18)
 
 # --- Deck ---
-async def create_deck(session: AsyncSession, admin_tg_id: int, title: str, new_per_day: int) -> Deck:
-    deck = Deck(admin_tg_id=admin_tg_id, title=title[:255], token=_new_token(), new_per_day=new_per_day)
+async def create_deck(session: AsyncSession, admin_tg_id: int, title: str, new_per_day: int, folder_id: str | None = None) -> Deck:
+    deck = Deck(
+        admin_tg_id=admin_tg_id,
+        title=title[:255],
+        token=_new_token(),
+        new_per_day=new_per_day,
+        folder_id=folder_id,
+    )
     session.add(deck)
     await session.commit()
     await session.refresh(deck)
@@ -41,6 +47,32 @@ async def set_deck_active(session: AsyncSession, deck_id: str, active: bool) -> 
     await session.execute(update(Deck).where(Deck.id == deck_id).values(is_active=active))
     await session.commit()
 
+async def get_or_create_folder(session: AsyncSession, admin_tg_id: int, path: str) -> DeckFolder:
+    path = path.strip().rstrip("/")
+    res = await session.execute(
+        select(DeckFolder).where(DeckFolder.admin_tg_id == admin_tg_id, DeckFolder.path == path)
+    )
+    folder = res.scalar_one_or_none()
+    if folder:
+        return folder
+    folder = DeckFolder(admin_tg_id=admin_tg_id, path=path)
+    session.add(folder)
+    await session.commit()
+    await session.refresh(folder)
+    return folder
+
+async def list_admin_folders(session: AsyncSession, admin_tg_id: int) -> list[DeckFolder]:
+    res = await session.execute(
+        select(DeckFolder).where(DeckFolder.admin_tg_id == admin_tg_id).order_by(DeckFolder.path.asc())
+    )
+    return list(res.scalars().all())
+
+async def list_all_folders(session: AsyncSession) -> list[DeckFolder]:
+    res = await session.execute(
+        select(DeckFolder).order_by(DeckFolder.admin_tg_id.asc(), DeckFolder.path.asc())
+    )
+    return list(res.scalars().all())
+
 async def list_admin_decks(session: AsyncSession, admin_tg_id: int) -> list[Deck]:
     res = await session.execute(select(Deck).where(Deck.admin_tg_id == admin_tg_id).order_by(Deck.created_at.desc()))
     return list(res.scalars().all())
@@ -49,6 +81,28 @@ async def list_admin_decks(session: AsyncSession, admin_tg_id: int) -> list[Deck
 async def list_all_decks(session: AsyncSession) -> list[Deck]:
     res = await session.execute(select(Deck).order_by(Deck.created_at.desc()))
     return list(res.scalars().all())
+
+async def list_decks_in_folder(session: AsyncSession, folder_id: str) -> list[Deck]:
+    res = await session.execute(select(Deck).where(Deck.folder_id == folder_id).order_by(Deck.title.asc()))
+    return list(res.scalars().all())
+
+async def get_folder_by_id(session: AsyncSession, folder_id: str) -> DeckFolder | None:
+    res = await session.execute(select(DeckFolder).where(DeckFolder.id == folder_id))
+    return res.scalar_one_or_none()
+
+async def list_ungrouped_decks(session: AsyncSession, admin_tg_id: int | None = None) -> list[Deck]:
+    stmt = select(Deck).where(Deck.folder_id.is_(None))
+    if admin_tg_id is not None:
+        stmt = stmt.where(Deck.admin_tg_id == admin_tg_id)
+    res = await session.execute(stmt.order_by(Deck.title.asc()))
+    return list(res.scalars().all())
+
+async def count_ungrouped_decks(session: AsyncSession, admin_tg_id: int | None = None) -> int:
+    stmt = select(func.count(Deck.id)).where(Deck.folder_id.is_(None))
+    if admin_tg_id is not None:
+        stmt = stmt.where(Deck.admin_tg_id == admin_tg_id)
+    res = await session.execute(stmt)
+    return int(res.scalar() or 0)
 
 async def delete_deck_full(session: AsyncSession, deck_id: str) -> dict[str, int]:
     """Delete deck and all associated data (cards, enrollments, reviews, sessions, flags).
