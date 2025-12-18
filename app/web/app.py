@@ -3,9 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 from fastapi import FastAPI, File, UploadFile, Form, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -70,7 +68,8 @@ def create_web_app(
             <input type="number" name="new_per_day" min="1" max="500" value="10"/>
           </div>
           <div class="row">
-            <input type="file" name="file" accept=".apkg" required/>
+            <input type="file" name="files" accept=".apkg" multiple required/>
+            <div><small>You can select multiple .apkg files.</small></div>
           </div>
           <div class="row">
             <button type="submit">Upload</button>
@@ -84,34 +83,48 @@ def create_web_app(
         token: str = Form(...),
         title: str = Form(""),
         new_per_day: int = Form(10),
-        file: UploadFile = File(...),
+        file: UploadFile | None = File(None),
+        files: list[UploadFile] | None = File(None),
     ):
         td = verify_upload_token(settings.upload_secret, token)
         if not td or td.admin_id not in settings.admin_ids:
             return _html_page("<h3>Unauthorized</h3><p>Invalid or expired link.</p>")
 
-        if not file.filename or not file.filename.lower().endswith(".apkg"):
-            return _html_page("<h3>Error</h3><p>Please upload a .apkg file.</p>")
+        upload_files: list[UploadFile] = []
+        if files:
+            upload_files.extend(files)
+        elif file:
+            upload_files.append(file)
+
+        if not upload_files:
+            return _html_page("<h3>Error</h3><p>Please upload at least one .apkg file.</p>")
+
+        bad = [f.filename for f in upload_files if not (f.filename and f.filename.lower().endswith(".apkg"))]
+        if bad:
+            return _html_page("<h3>Error</h3><p>Only .apkg files are allowed.</p>")
 
         if new_per_day < 1 or new_per_day > 500:
             return _html_page("<h3>Error</h3><p>new_per_day must be 1..500.</p>")
 
         os.makedirs(settings.import_tmp_dir, exist_ok=True)
-        dest = Path(settings.import_tmp_dir) / f"web_{uuid.uuid4().hex}.apkg"
+        prefix = title.strip()
+        multiple_files = len(upload_files) > 1
+        seen_titles: dict[str, int] = {}
 
-        # Stream-save to disk (avoid holding whole file in memory)
-        with dest.open("wb") as f:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                f.write(chunk)
+        def _make_deck_title(upload_file: UploadFile) -> str:
+            filename = upload_file.filename or "Deck"
+            stem = Path(filename).stem if upload_file.filename else "Deck"
+            if multiple_files:
+                base = stem if not prefix else f"{prefix} - {stem}"
+            else:
+                base = prefix or filename or "Deck"
+            count = seen_titles.get(base, 0) + 1
+            seen_titles[base] = count
+            if count > 1:
+                return f"{base} ({count})"
+            return base
 
-        deck_title = title.strip() or (file.filename or "Deck")
-
-        await bot.send_message(td.admin_id, f"Web upload received: {deck_title}\nImporting...")
-
-        async def _bg_import():
+        async def _bg_import_one(dest: Path, deck_title: str):
             try:
                 res = await import_apkg_from_path(
                     settings=settings,
@@ -132,13 +145,30 @@ def create_web_app(
             except Exception as e:
                 await bot.send_message(td.admin_id, f"Import failed: {type(e).__name__}: {e}")
             finally:
-                try:
-                    dest.unlink(missing_ok=True)
-                except Exception:
-                    pass
+                dest.unlink(missing_ok=True)
 
-        asyncio.create_task(_bg_import())
+        tasks: list[asyncio.Task] = []
 
-        return _html_page("<h3>Upload complete</h3><p>You can close this page. Results will arrive in Telegram.</p>")
+        for upload_file in upload_files:
+            deck_title = _make_deck_title(upload_file)
+            dest = Path(settings.import_tmp_dir) / f"web_{uuid.uuid4().hex}.apkg"
+
+            # Stream-save to disk (avoid holding whole file in memory)
+            with dest.open("wb") as f:
+                while True:
+                    chunk = await upload_file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+
+            await bot.send_message(td.admin_id, f"Web upload received: {deck_title}\nImporting...")
+            tasks.append(asyncio.create_task(_bg_import_one(dest, deck_title)))
+
+        if multiple_files:
+            summary = f"Queued {len(tasks)} deck(s) for import. You can close this page."
+        else:
+            summary = "You can close this page. Results will arrive in Telegram."
+
+        return _html_page(f"<h3>Upload complete</h3><p>{summary}</p>")
 
     return app
