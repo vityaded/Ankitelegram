@@ -94,14 +94,14 @@ def create_web_app(
 
             function apkgFiles() {{
                 const files = [...(fileInput.files || []), ...(folderInput.files || [])];
-                return files.filter(f => /\.apkg$/i.test(f.name || ''));
+                return files.filter(f => /\\.apkg$/i.test(f.name || ''));
             }}
 
             function updateInfo() {{
                 const files = apkgFiles();
                 const count = files.length;
                 infoEl.textContent = count
-                    ? `Found ${count} .apkg files in selected folder(s)`
+                    ? `Found ${{count}} .apkg files in selected folder(s)`
                     : "No .apkg files selected yet.";
                 submitBtn.disabled = count === 0;
             }}
