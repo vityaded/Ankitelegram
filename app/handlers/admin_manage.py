@@ -7,9 +7,22 @@ from aiogram.fsm.state import State, StatesGroup
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.keyboards import kb_admin_deck, kb_admin_deck_list
+from app.bot.keyboards import kb_admin_deck, kb_admin_deck_list, kb_admin_folder_root
 from app.bot.messages import deck_links, invalid_number
-from app.db.repo import get_deck_by_id, export_flags, rotate_deck_token, set_deck_active, update_deck_new_per_day, list_admin_decks, list_all_decks, delete_deck_full
+from app.db.repo import (
+    get_deck_by_id,
+    export_flags,
+    rotate_deck_token,
+    set_deck_active,
+    update_deck_new_per_day,
+    delete_deck_full,
+    list_admin_folders,
+    list_all_folders,
+    list_decks_in_folder,
+    list_ungrouped_decks,
+    count_ungrouped_decks,
+    get_folder_by_id,
+)
 from app.services.stats_service import admin_stats
 
 router = Router()
@@ -109,7 +122,12 @@ async def on_admin_setn(message: Message, session: AsyncSession, state: FSMConte
 def _is_admin(settings, tg_id: int) -> bool:
     return (not settings.admin_ids) or (tg_id in settings.admin_ids)
 
-@router.callback_query(F.data == "ad_list")
+def _folder_label(folder, settings) -> str:
+    if settings.admin_ids:
+        return f"{folder.admin_tg_id} · {folder.path}"
+    return folder.path
+
+@router.callback_query(F.data.in_(("ad_list", "adm_decks_root")))
 async def cb_ad_list(call: CallbackQuery, session: AsyncSession, settings):
     if not _is_admin(settings, call.from_user.id):
         await call.answer("Not allowed", show_alert=True)
@@ -117,17 +135,60 @@ async def cb_ad_list(call: CallbackQuery, session: AsyncSession, settings):
 
     # If ADMIN_IDS is set, treat them as global admins -> show all decks.
     if settings.admin_ids:
-        decks = await list_all_decks(session)
+        folders = await list_all_folders(session)
+        ungrouped_count = await count_ungrouped_decks(session, None)
     else:
-        decks = await list_admin_decks(session, call.from_user.id)
+        folders = await list_admin_folders(session, call.from_user.id)
+        ungrouped_count = await count_ungrouped_decks(session, call.from_user.id)
 
-    items = [(d.id, d.title, bool(d.is_active)) for d in decks]
-    if not items:
+    folder_items = [(f.id, _folder_label(f, settings)) for f in folders]
+    if not folder_items and not ungrouped_count:
         await call.message.answer("No decks yet.")
         await call.answer()
         return
 
-    await call.message.answer("Decks:", reply_markup=kb_admin_deck_list(items))
+    await call.message.answer("Folders:", reply_markup=kb_admin_folder_root(folder_items, ungrouped_count))
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("adm_folder:"))
+async def cb_ad_folder(call: CallbackQuery, session: AsyncSession, settings):
+    if not _is_admin(settings, call.from_user.id):
+        await call.answer("Not allowed", show_alert=True)
+        return
+    folder_id = call.data.split(":", 1)[1]
+    folder = await get_folder_by_id(session, folder_id)
+    if not folder:
+        await call.answer("Folder not found", show_alert=True)
+        return
+    if not settings.admin_ids and folder.admin_tg_id != call.from_user.id:
+        await call.answer("Not allowed", show_alert=True)
+        return
+
+    decks = await list_decks_in_folder(session, folder_id)
+    items = [(d.id, d.title, bool(d.is_active)) for d in decks]
+    await call.message.answer(
+        f"Folder: {_folder_label(folder, settings)}",
+        reply_markup=kb_admin_deck_list(items, back_callback="adm_decks_root"),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "adm_ungrouped")
+async def cb_ad_ungrouped(call: CallbackQuery, session: AsyncSession, settings):
+    if not _is_admin(settings, call.from_user.id):
+        await call.answer("Not allowed", show_alert=True)
+        return
+
+    admin_filter = None if settings.admin_ids else call.from_user.id
+    decks = await list_ungrouped_decks(session, admin_filter)
+    items = [(d.id, d.title, bool(d.is_active)) for d in decks]
+    if not items:
+        await call.message.answer("No ungrouped decks.", reply_markup=kb_admin_deck_list([], back_callback="adm_decks_root"))
+        await call.answer()
+        return
+
+    await call.message.answer("Ungrouped decks:", reply_markup=kb_admin_deck_list(items, back_callback="adm_decks_root"))
     await call.answer()
 
 @router.callback_query(F.data.startswith("ad_open:"))
@@ -145,8 +206,14 @@ async def cb_ad_open(call: CallbackQuery, session: AsyncSession, bot_username: s
         await call.answer("Not allowed", show_alert=True)
         return
     links = deck_links(bot_username, deck.token)
+    folder_line = ""
+    if deck.folder_id:
+        folder = await get_folder_by_id(session, deck.folder_id)
+        if folder:
+            folder_line = f"Folder: {_folder_label(folder, settings)}\n"
     await call.message.answer(
         f"{deck.title}\n"
+        f"{folder_line}"
         f"Anki mode: {links['anki']}\n"
         f"Watch mode: {links['watch']}\n"
         f"N/day: {deck.new_per_day}\n"
@@ -181,7 +248,7 @@ async def cb_ad_delete_confirm(call: CallbackQuery, session: AsyncSession, setti
         f"Delete deck '{deck.title}'?\nThis will remove all cards, enrollments, reviews, study sessions and flags.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Confirm delete", callback_data=f"ad_del2:{deck_id}")],
-            [InlineKeyboardButton(text="Cancel", callback_data="ad_list")],
+            [InlineKeyboardButton(text="Cancel", callback_data="adm_decks_root")],
         ]),
     )
     await call.answer()
@@ -203,4 +270,3 @@ async def cb_ad_delete_do(call: CallbackQuery, session: AsyncSession, settings):
     counts = await delete_deck_full(session, deck_id)
     await call.message.answer(f"Deck deleted. (cards={counts.get('cards',0)}, enrollments={counts.get('enrollments',0)})")
     await call.answer()
-

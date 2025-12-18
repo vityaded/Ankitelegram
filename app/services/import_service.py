@@ -9,7 +9,7 @@ from aiogram import Bot
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 
 from app.db.models import Card
-from app.db.repo import create_deck
+from app.db.repo import create_deck, get_or_create_folder
 from app.services.media_store import get_or_upload_file_id
 from app.services.apkg_importer.unpack import unpack_apkg
 from app.services.apkg_importer.parse_collection import iter_notes
@@ -32,6 +32,7 @@ async def import_apkg_from_path(
     apkg_path: str,
     deck_title: str,
     new_per_day: int,
+    folder_path: str | None = None,
 ) -> dict:
     """Imports an .apkg, uploads media to Telegram, creates deck+cards.
 
@@ -64,7 +65,12 @@ async def import_apkg_from_path(
     skipped = 0
 
     async with sessionmaker() as session:
-        deck = await create_deck(session, admin_tg_id, deck_title, new_per_day=new_per_day)
+        folder_id = None
+        if folder_path:
+            folder = await get_or_create_folder(session, admin_tg_id=admin_tg_id, path=folder_path)
+            folder_id = folder.id
+
+        deck = await create_deck(session, admin_tg_id, deck_title, new_per_day=new_per_day, folder_id=folder_id)
 
         # Insert cards. Commit in chunks.
         for dto in dtos:
@@ -128,4 +134,11 @@ async def import_apkg_from_path(
     except Exception:
         pass
 
-    return {"imported": imported, "skipped": skipped, "links": links, "link": links["anki"]}
+    return {
+        "imported": imported,
+        "skipped": skipped,
+        "links": links,
+        "link": links["anki"],
+        "folder_path": folder_path,
+        "deck_title": deck_title,
+    }
