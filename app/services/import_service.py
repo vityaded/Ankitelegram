@@ -4,8 +4,10 @@ import asyncio
 import os
 import uuid
 from pathlib import Path
+from typing import Awaitable, Callable, Iterable
 
 from aiogram import Bot
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 
 from app.db.models import Card
@@ -20,6 +22,78 @@ from app.services.translate_service import (
     link_card_translation,
 )
 from app.bot.messages import deck_links
+
+
+FileIdProvider = Callable[[object], Awaitable[str]]
+
+
+async def _insert_cards_from_dtos(
+    session: AsyncSession,
+    *,
+    dtos: Iterable[object],
+    deck_id: str,
+    translate_cfg: TranslateConfig | None,
+    translate_sem: asyncio.Semaphore | None,
+    file_id_provider: FileIdProvider,
+    commit_every: int = 50,
+) -> tuple[int, int]:
+    imported = 0
+    skipped = 0
+
+    for dto in dtos:
+        try:
+            file_id = await file_id_provider(dto)
+        except Exception:
+            skipped += 1
+            continue
+
+        card_id = str(uuid.uuid4())
+        try:
+            async with session.begin_nested():
+                card = Card(
+                    id=card_id,
+                    deck_id=deck_id,
+                    note_guid=dto.note_guid,
+                    answer_text=dto.answer_text,
+                    alt_answers=dto.alt_answers,
+                    media_kind=dto.media_kind,
+                    tg_file_id=file_id,
+                    media_sha256=dto.media_sha256,
+                    is_valid=True,
+                )
+                session.add(card)
+
+                # Translation should not break import.
+                try:
+                    if translate_cfg and translate_cfg.enabled:
+                        cache_key = await get_or_create_translation_cache(
+                            session,
+                            source_lang=translate_cfg.source_lang,
+                            target_lang=translate_cfg.target_lang,
+                            text=dto.answer_text,
+                            cfg=translate_cfg,
+                            sem=translate_sem or asyncio.Semaphore(1),
+                        )
+                        if cache_key:
+                            await link_card_translation(session, card_id=card_id, cache_key=cache_key)
+                except Exception:
+                    # ignore translation failures, keep the card
+                    pass
+
+                await session.flush()
+
+            imported += 1
+            if commit_every and imported % commit_every == 0:
+                await session.commit()
+        except IntegrityError:
+            skipped += 1
+            continue
+        except Exception:
+            await session.rollback()
+            raise
+
+    await session.commit()
+    return imported, skipped
 
 
 async def import_apkg_from_path(
@@ -61,9 +135,6 @@ async def import_apkg_from_path(
     )
     translate_sem = asyncio.Semaphore(max(1, int(cfg.concurrency or 1)))
 
-    imported = 0
-    skipped = 0
-
     async with sessionmaker() as session:
         folder_id = None
         if folder_path:
@@ -71,60 +142,30 @@ async def import_apkg_from_path(
             folder_id = folder.id
 
         deck = await create_deck(session, admin_tg_id, deck_title, new_per_day=new_per_day, folder_id=folder_id)
+        deck_id = deck.id
+        deck_token = deck.token
 
-        # Insert cards. Commit in chunks.
-        for dto in dtos:
-            try:
-                file_id = await get_or_upload_file_id(
-                    db=session,
-                    bot=bot,
-                    admin_tg_id=admin_tg_id,
-                    media_bytes=dto.media_bytes,
-                    filename=dto.filename,
-                    media_sha256=dto.media_sha256,
-                    media_kind=dto.media_kind,
-                )
+        async def _file_id_provider(dto):
+            return await get_or_upload_file_id(
+                db=session,
+                bot=bot,
+                admin_tg_id=admin_tg_id,
+                media_bytes=dto.media_bytes,
+                filename=dto.filename,
+                media_sha256=dto.media_sha256,
+                media_kind=dto.media_kind,
+            )
 
-                card_id = str(uuid.uuid4())
-                card = Card(
-                    id=card_id,
-                    deck_id=deck.id,
-                    note_guid=dto.note_guid,
-                    answer_text=dto.answer_text,
-                    alt_answers=dto.alt_answers,
-                    media_kind=dto.media_kind,
-                    tg_file_id=file_id,
-                    media_sha256=dto.media_sha256,
-                    is_valid=True,
-                )
-                session.add(card)
+        imported, skipped = await _insert_cards_from_dtos(
+            session,
+            dtos=dtos,
+            deck_id=deck_id,
+            translate_cfg=cfg,
+            translate_sem=translate_sem,
+            file_id_provider=_file_id_provider,
+        )
 
-                # Translation should not break import.
-                try:
-                    cache_key = await get_or_create_translation_cache(
-                        session,
-                        source_lang=cfg.source_lang,
-                        target_lang=cfg.target_lang,
-                        text=dto.answer_text,
-                        cfg=cfg,
-                        sem=translate_sem,
-                    )
-                    if cache_key:
-                        await link_card_translation(session, card_id=card_id, cache_key=cache_key)
-                except Exception:
-                    # ignore translation failures, keep the card
-                    pass
-
-                imported += 1
-                if imported % 50 == 0:
-                    await session.commit()
-            except Exception:
-                await session.rollback()
-                skipped += 1
-                continue
-
-        await session.commit()
-        links = deck_links(bot_username, deck.token)
+        links = deck_links(bot_username, deck_token)
 
     # cleanup unpack dir
     try:
