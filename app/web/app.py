@@ -21,6 +21,7 @@ def create_web_app(
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> FastAPI:
     app = FastAPI(title="anki_listen_bot uploader")
+    import_sem = asyncio.Semaphore(max(1, int(getattr(settings, "import_concurrency", 1) or 1)))
 
     def _html_page(body: str) -> HTMLResponse:
         return HTMLResponse(f"""<!doctype html>
@@ -210,17 +211,18 @@ def create_web_app(
 
         async def _bg_import_one(dest: Path, deck_title: str, folder_path: str | None):
             try:
-                res = await import_apkg_from_path(
-                    settings=settings,
-                    bot=bot,
-                    bot_username=bot_username,
-                    sessionmaker=sessionmaker,
-                    admin_tg_id=td.admin_id,
-                    apkg_path=str(dest),
-                    deck_title=deck_title,
-                    new_per_day=new_per_day,
-                    folder_path=folder_path,
-                )
+                async with import_sem:
+                    res = await import_apkg_from_path(
+                        settings=settings,
+                        bot=bot,
+                        bot_username=bot_username,
+                        sessionmaker=sessionmaker,
+                        admin_tg_id=td.admin_id,
+                        apkg_path=str(dest),
+                        deck_title=deck_title,
+                        new_per_day=new_per_day,
+                        folder_path=folder_path,
+                    )
                 folder_line = f"\nFolder: {res['folder_path']}" if res.get("folder_path") else ""
                 await bot.send_message(
                     td.admin_id,

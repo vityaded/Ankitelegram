@@ -67,6 +67,7 @@ class Settings:
     translate_max_retries: int
     translate_base_delay_ms: int
     translate_max_delay_ms: int
+    import_concurrency: int
 
     admin_ids: set[int]
     upload_secret: str
@@ -105,6 +106,7 @@ def load_settings() -> Settings:
     translate_max_retries = _get_int("TRANSLATE_MAX_RETRIES", 30)
     translate_base_delay_ms = _get_int("TRANSLATE_BASE_DELAY_MS", 750)
     translate_max_delay_ms = _get_int("TRANSLATE_MAX_DELAY_MS", 60000)
+    import_concurrency = _get_int("IMPORT_CONCURRENCY", 1)
 
     admin_ids = set(_get_int_list("ADMIN_IDS", ""))
     upload_secret = _get_env("UPLOAD_SECRET", "change_me_to_a_long_random_secret")
@@ -130,6 +132,7 @@ def load_settings() -> Settings:
         translate_max_retries=translate_max_retries,
         translate_base_delay_ms=translate_base_delay_ms,
         translate_max_delay_ms=translate_max_delay_ms,
+        import_concurrency=import_concurrency,
         admin_ids=admin_ids,
         upload_secret=upload_secret,
         web_host=web_host,

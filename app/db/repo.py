@@ -21,8 +21,7 @@ async def create_deck(session: AsyncSession, admin_tg_id: int, title: str, new_p
         folder_id=folder_id,
     )
     session.add(deck)
-    await session.commit()
-    await session.refresh(deck)
+    await session.flush()
     return deck
 
 async def get_deck_by_token(session: AsyncSession, token: str) -> Deck | None:
@@ -57,8 +56,7 @@ async def get_or_create_folder(session: AsyncSession, admin_tg_id: int, path: st
         return folder
     folder = DeckFolder(admin_tg_id=admin_tg_id, path=path)
     session.add(folder)
-    await session.commit()
-    await session.refresh(folder)
+    await session.flush()
     return folder
 
 async def list_admin_folders(session: AsyncSession, admin_tg_id: int) -> list[DeckFolder]:
