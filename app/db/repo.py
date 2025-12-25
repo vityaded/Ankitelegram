@@ -474,6 +474,17 @@ async def unenroll_all_students_wipe_progress(session: AsyncSession, deck_id: st
         await session.rollback()
         raise
 
+async def unenroll_user_wipe_progress(session: AsyncSession, user_id: str) -> None:
+    try:
+        await session.execute(delete(StudySession).where(StudySession.user_id == user_id))
+        await session.execute(delete(Flag).where(Flag.user_id == user_id))
+        await session.execute(delete(Review).where(Review.user_id == user_id))
+        await session.execute(delete(Enrollment).where(Enrollment.user_id == user_id))
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+
 
 # --- Translations ---
 async def get_card_translation_uk(session: AsyncSession, card_id: str) -> str | None:
