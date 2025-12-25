@@ -24,6 +24,7 @@ from app.db.repo import (
     upsert_review,
     get_today_session,
     get_card_translation_uk,
+    ensure_review_placeholder,
 )
 from app.db.models import StudySession
 from app.services.study_engine import ensure_current_card, extend_today_with_more, record_answered_card, start_or_resume_today
@@ -79,6 +80,7 @@ async def cb_more(call: CallbackQuery, session: AsyncSession, settings, locks: L
             await call.answer()
             return
 
+        await ensure_review_placeholder(session, user.id, card.id)
         await _send_card(bot, call.message.chat.id, card, deck_id)
         await call.answer()
 
@@ -116,6 +118,7 @@ async def on_answer(message: Message, session: AsyncSession, settings, locks: Lo
             if cid:
                 next_card = await get_card(session, cid)
                 if next_card:
+                    await ensure_review_placeholder(session, user.id, next_card.id)
                     await _send_card(bot, message.chat.id, next_card, deck_id)
             else:
                 await message.answer(done_today(), reply_markup=kb_study_more(deck_id))
@@ -162,4 +165,5 @@ async def on_answer(message: Message, session: AsyncSession, settings, locks: Lo
         if not next_card:
             await message.answer(done_today(), reply_markup=kb_study_more(deck_id))
             return
+        await ensure_review_placeholder(session, user.id, next_card.id)
         await _send_card(bot, message.chat.id, next_card, deck_id)

@@ -6,7 +6,7 @@ from sqlalchemy import select, update, delete, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Deck, Card, User, Enrollment, Review, StudySession, Flag, CardTranslation, TranslationCache, DeckFolder
+from app.db.models import Deck, Card, User, Enrollment, Review, ReviewState, StudySession, Flag, CardTranslation, TranslationCache, DeckFolder
 
 def _new_token() -> str:
     return secrets.token_urlsafe(18)
@@ -164,24 +164,17 @@ async def get_card(session: AsyncSession, card_id: str) -> Card | None:
     return res.scalar_one_or_none()
 
 async def get_new_cards(session: AsyncSession, deck_id: str, user_id: str, limit: int) -> list[str]:
-    # Cards that have no review row for this user OR review.state == 'new'
-    subq = select(Review.card_id, Review.state).where(Review.user_id == user_id).subquery()
+    # Cards that have no review row for this user (never seen).
+    subq = select(Review.card_id).where(Review.user_id == user_id).subquery()
     stmt = (
         select(Card.id)
         .where(Card.deck_id == deck_id, Card.is_valid == True)
-        .where(~Card.id.in_(select(subq.c.card_id).where(subq.c.state == 'suspended')))  # exclude suspended
+        .where(~Card.id.in_(select(subq.c.card_id)))
         .order_by(Card.created_at.asc())
         .limit(limit)
     )
     res = await session.execute(stmt)
-    card_ids = []
-    for (cid,) in res.all():
-        # if review exists and not 'new', skip
-        r = await session.execute(select(Review).where(Review.user_id==user_id, Review.card_id==cid))
-        rv = r.scalar_one_or_none()
-        if rv is None or rv.state == "new":
-            card_ids.append(cid)
-    return card_ids
+    return [cid for (cid,) in res.all()]
 
 async def get_due_learning_cards(session: AsyncSession, user_id: str, deck_id: str, now: datetime, limit: int = 1) -> list[str]:
     stmt = (
@@ -276,6 +269,27 @@ async def count_enrolled_students(session: AsyncSession, deck_id: str) -> int:
 async def get_review(session: AsyncSession, user_id: str, card_id: str) -> Review | None:
     res = await session.execute(select(Review).where(Review.user_id==user_id, Review.card_id==card_id))
     return res.scalar_one_or_none()
+
+async def ensure_review_placeholder(session: AsyncSession, user_id: str, card_id: str) -> Review:
+    review = await get_review(session, user_id, card_id)
+    if review:
+        return review
+    review = Review(
+        user_id=user_id,
+        card_id=card_id,
+        state=ReviewState.new.value,
+        updated_at=datetime.utcnow(),
+    )
+    session.add(review)
+    try:
+        await session.commit()
+        return review
+    except IntegrityError:
+        await session.rollback()
+        existing = await get_review(session, user_id, card_id)
+        if existing:
+            return existing
+        raise
 
 async def upsert_review(session: AsyncSession, review: Review) -> None:
     session.add(review)

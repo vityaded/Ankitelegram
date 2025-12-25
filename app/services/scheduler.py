@@ -18,6 +18,7 @@ from app.db.repo import (
     get_due_learning_cards,
     update_session_progress,
     get_today_session,
+    ensure_review_placeholder,
 )
 from app.services.card_sender import send_card_to_chat
 
@@ -79,6 +80,7 @@ async def push_today_cards(*, bot: Bot, settings, sessionmaker: async_sessionmak
                 card = await get_card(s, cid)
                 if not card:
                     continue
+                await ensure_review_placeholder(s, user_id, card.id)
                 await send_card_to_chat(bot, tg_id, card, deck_id)
 
             # basic rate limit
@@ -148,6 +150,6 @@ async def _run_due_learning_push_once(
             if not card:
                 await update_session_progress(s, current.id, current.pos, None)
                 continue
-
+            await ensure_review_placeholder(s, current.user_id, card.id)
             tg_id = (await s.execute(select(User.tg_id).where(User.id == current.user_id))).scalar_one()
             await send_card_fn(bot, tg_id, card, current.deck_id)
