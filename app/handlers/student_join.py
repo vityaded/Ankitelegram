@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.token_service import parse_payload
 from app.bot.messages import deck_not_found, deck_inactive, done_today
 from app.bot.keyboards import kb_study_more
-from app.db.repo import get_deck_by_token, get_or_create_user, enroll_user, get_card
+from app.db.repo import get_deck_by_token, get_or_create_user, enroll_user, get_card, ensure_review_placeholder
 from app.utils.locks import LockRegistry
 from app.utils.timez import today_date
 from app.services.study_engine import ensure_current_card, start_or_resume_today
@@ -67,4 +67,5 @@ async def start_with_payload(message: Message, session: AsyncSession, settings, 
             return
 
         # Minimal UX: send the card immediately (no extra menus).
+        await ensure_review_placeholder(session, user_id, card.id)
         await send_card_to_chat(bot, message.chat.id, card, deck_id)

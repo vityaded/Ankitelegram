@@ -12,7 +12,7 @@ from app.utils.locks import LockRegistry
 from app.utils.timez import today_date
 from app.bot.messages import flagged_bad, done_today, need_today_first
 from app.bot.keyboards import kb_study_more
-from app.db.repo import get_or_create_user, get_today_session, get_card
+from app.db.repo import get_or_create_user, get_today_session, get_card, ensure_review_placeholder
 from app.db.models import StudySession
 from app.services.flag_service import flag_bad_card
 from app.services.study_engine import ensure_current_card, record_answered_card
@@ -70,5 +70,6 @@ async def cb_bad_card(call: CallbackQuery, session: AsyncSession, settings, lock
             await call.message.answer(done_today(), reply_markup=kb_study_more(deck_id))
             await call.answer()
             return
+        await ensure_review_placeholder(session, user.id, next_card.id)
         await send_card_to_chat(bot, call.message.chat.id, next_card, deck_id)
         await call.answer()
