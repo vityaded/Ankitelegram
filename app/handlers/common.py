@@ -4,9 +4,11 @@ from aiogram import Router
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.messages import start_message
 from app.bot.keyboards import kb_admin_home
+from app.db.repo import get_or_create_user, unenroll_user_wipe_progress
 from app.services.token_service import parse_payload
 
 router = Router()
@@ -35,3 +37,9 @@ async def cmd_start(message: Message, state: FSMContext, settings, bot_username:
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     await message.answer(start_message())
+
+@router.message(Command("unroll_me"))
+async def cmd_unroll_me(message: Message, session: AsyncSession):
+    user = await get_or_create_user(session, message.from_user.id)
+    await unenroll_user_wipe_progress(session, user.id)
+    await message.answer("You have been unenrolled from all decks and your progress was erased.")
