@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 
 from app.services.grader import Verdict
+from app.utils.text_norm import normalize_answer
 from app.utils.diff_highlight import highlight_diff
 
 
@@ -15,6 +16,10 @@ def format_compare(
     max_len: int = 3500,
 ) -> str:
     icon = "✅" if verdict == Verdict.OK else ("🟨" if verdict == Verdict.ALMOST else "❌")
+
+    norm_correct = normalize_answer(correct or "")
+    norm_user = normalize_answer(user or "")
+    show_user = norm_user and norm_user != norm_correct
 
     if correct:
         corr_html, user_html = highlight_diff(correct, user or "")
@@ -30,7 +35,8 @@ def format_compare(
     if uk:
         uk_html = html.escape(uk, quote=False)
         lines.append(f"UA: {uk_html}")
-    lines.append(f"You: {user_html}")
+    if show_user:
+        lines.append(f"You: {user_html}")
 
     msg = "\n".join(lines)
     if len(msg) > max_len:
