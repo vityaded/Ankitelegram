@@ -163,7 +163,7 @@ async def get_card(session: AsyncSession, card_id: str) -> Card | None:
     res = await session.execute(select(Card).where(Card.id == card_id))
     return res.scalar_one_or_none()
 
-async def get_new_cards(session: AsyncSession, deck_id: str, user_id: str, limit: int) -> list[str]:
+async def get_new_cards(session: AsyncSession, deck_id: str, user_id: str, limit: int | None) -> list[str]:
     # Cards that have no review row for this user (never seen).
     subq = select(Review.card_id).where(Review.user_id == user_id).subquery()
     stmt = (
@@ -171,8 +171,9 @@ async def get_new_cards(session: AsyncSession, deck_id: str, user_id: str, limit
         .where(Card.deck_id == deck_id, Card.is_valid == True)
         .where(~Card.id.in_(select(subq.c.card_id)))
         .order_by(Card.created_at.asc())
-        .limit(limit)
     )
+    if limit is not None:
+        stmt = stmt.limit(limit)
     res = await session.execute(stmt)
     return [cid for (cid,) in res.all()]
 
