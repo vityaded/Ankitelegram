@@ -40,6 +40,12 @@ async def _send_card(bot: Bot, chat_id: int, card, deck_id: str):
     await send_card_to_chat(bot, chat_id, card, deck_id)
 
 
+def _study_more_markup(mode: str, deck_id: str):
+    if mode == "watch":
+        return None
+    return kb_study_more(deck_id)
+
+
 @router.callback_query(F.data.startswith("more:"))
 async def cb_more(call: CallbackQuery, session: AsyncSession, settings, locks: LockRegistry, bot: Bot):
     deck_id = call.data.split(":", 1)[1]
@@ -54,6 +60,7 @@ async def cb_more(call: CallbackQuery, session: AsyncSession, settings, locks: L
         await call.answer()
         return
 
+    mode = await get_enrollment_mode(session, user.id, deck_id)
     lock = locks.lock((user.id, deck_id))
     async with lock:
         now_utc = datetime.utcnow()
@@ -70,13 +77,13 @@ async def cb_more(call: CallbackQuery, session: AsyncSession, settings, locks: L
             cid = await ensure_current_card(session, user.id, deck_id, sdate, now_utc)
 
         if not cid:
-            await call.message.answer(no_cards_today(), reply_markup=kb_study_more(deck_id))
+            await call.message.answer(no_cards_today(), reply_markup=_study_more_markup(mode, deck_id))
             await call.answer()
             return
 
         card = await get_card(session, cid)
         if not card:
-            await call.message.answer(done_today(), reply_markup=kb_study_more(deck_id))
+            await call.message.answer(done_today(), reply_markup=_study_more_markup(mode, deck_id))
             await call.answer()
             return
 
@@ -121,7 +128,8 @@ async def on_answer(message: Message, session: AsyncSession, settings, locks: Lo
                     await ensure_review_placeholder(session, user.id, next_card.id)
                     await _send_card(bot, message.chat.id, next_card, deck_id)
             else:
-                await message.answer(done_today(), reply_markup=kb_study_more(deck_id))
+                mode = await get_enrollment_mode(session, user.id, deck_id)
+                await message.answer(done_today(), reply_markup=_study_more_markup(mode, deck_id))
             return
 
         now_utc = datetime.utcnow()
@@ -159,11 +167,11 @@ async def on_answer(message: Message, session: AsyncSession, settings, locks: Lo
         await record_answered_card(session, sess2, card_id)
         next_id = await ensure_current_card(session, user.id, deck_id, sdate, datetime.utcnow())
         if not next_id:
-            await message.answer(done_today(), reply_markup=kb_study_more(deck_id))
+            await message.answer(done_today(), reply_markup=_study_more_markup(mode, deck_id))
             return
         next_card = await get_card(session, next_id)
         if not next_card:
-            await message.answer(done_today(), reply_markup=kb_study_more(deck_id))
+            await message.answer(done_today(), reply_markup=_study_more_markup(mode, deck_id))
             return
         await ensure_review_placeholder(session, user.id, next_card.id)
         await _send_card(bot, message.chat.id, next_card, deck_id)

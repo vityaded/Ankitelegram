@@ -10,6 +10,7 @@ from app.db.repo import (
     get_deck_by_id,
     get_due_learning_cards,
     get_due_review_cards,
+    get_enrollment_mode,
     get_new_cards,
     get_today_session,
     update_session_progress,
@@ -116,7 +117,9 @@ async def extend_today_with_more(
         return None
 
     due_review = await get_due_review_cards(session, user_id, deck_id, now_utc, limit=50)
-    new = await get_new_cards(session, deck_id, user_id, deck.new_per_day + extra_new)
+    mode = await get_enrollment_mode(session, user_id, deck_id)
+    new_limit = None if mode == "watch" else deck.new_per_day + extra_new
+    new = await get_new_cards(session, deck_id, user_id, new_limit)
 
     seen = set(sess.queue or [])
     add: list[str] = []
