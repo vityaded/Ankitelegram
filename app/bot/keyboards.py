@@ -53,7 +53,9 @@ def kb_admin_folder_root(folders: list[tuple[str, str]], ungrouped_count: int) -
 def kb_admin_home(settings, admin_id: int) -> InlineKeyboardMarkup:
     tok = make_upload_token(settings.upload_secret, admin_id, ttl_seconds=3600)
     url = f"{settings.web_base_url}/upload?token={tok}"
+    admin_url = f"{settings.web_base_url}/admin?token={tok}"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="All decks", callback_data="adm_decks_root")],
         [InlineKeyboardButton(text="Upload deck (large)", url=url)],
+        [InlineKeyboardButton(text="Open web admin", url=admin_url)],
 ])
