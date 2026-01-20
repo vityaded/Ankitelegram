@@ -11,7 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.token_service import parse_payload
 from app.bot.messages import deck_not_found, deck_inactive, done_today
 from app.bot.keyboards import kb_study_more
-from app.db.repo import get_deck_by_token, get_or_create_user, enroll_user, get_card, ensure_review_placeholder
+from app.db.repo import (
+    get_deck_by_token,
+    get_or_create_user,
+    enroll_user,
+    get_card,
+    ensure_review_placeholder,
+    unenroll_user_from_other_decks,
+)
 from app.utils.locks import LockRegistry
 from app.utils.timez import today_date
 from app.services.study_engine import ensure_current_card, start_or_resume_today
@@ -48,6 +55,7 @@ async def start_with_payload(message: Message, session: AsyncSession, settings, 
     # which expires ORM objects; accessing user.id after rollback can trigger async
     # lazy-loading and crash with MissingGreenlet.
     user_id = user.id
+    await unenroll_user_from_other_decks(session, user_id, deck_id)
     await enroll_user(session, user_id, deck_id, mode=mode)
 
     lock = locks.lock((user_id, deck_id))
