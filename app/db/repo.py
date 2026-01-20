@@ -432,6 +432,16 @@ async def get_today_session(session: AsyncSession, user_id: str, deck_id: str, s
     )
     return res.scalar_one_or_none()
 
+async def get_active_study_session_for_date(session: AsyncSession, user_id: str, study_date) -> StudySession | None:
+    res = await session.execute(
+        select(StudySession).where(
+            StudySession.user_id == user_id,
+            StudySession.study_date == study_date,
+            StudySession.current_card_id.is_not(None),
+        )
+    )
+    return res.scalar_one_or_none()
+
 async def get_study_sessions_for_user_deck_in_range(session: AsyncSession, user_id: str, deck_id: str, date_from, date_to) -> list[StudySession]:
     stmt = (
         select(StudySession)
