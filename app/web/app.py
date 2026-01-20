@@ -15,6 +15,9 @@ from app.db.repo import (
     count_enrolled_students,
     count_ungrouped_decks,
     compute_overall_progress,
+    count_decks_in_folder,
+    delete_folder,
+    delete_folder_if_empty,
     get_deck_by_id,
     get_folder_by_id,
     list_admin_folders,
@@ -22,6 +25,10 @@ from app.db.repo import (
     list_decks_in_folder,
     list_enrolled_students,
     list_ungrouped_decks,
+    reassign_decks_from_folder,
+    update_deck_folder,
+    update_deck_title,
+    update_folder_path,
 )
 from app.services.admin_auth import verify_upload_token
 from app.services.import_service import import_apkg_from_path
@@ -156,16 +163,115 @@ def create_web_app(
             if not settings.admin_ids and folder.admin_tg_id != admin_id:
                 return _html_page("<h3>Unauthorized</h3><p>Not allowed.</p>")
             decks = await list_decks_in_folder(session, folder_id)
+            if settings.admin_ids:
+                folders = await list_all_folders(session)
+            else:
+                folders = await list_admin_folders(session, admin_id)
 
         deck_items = "".join(
             f'<li><a href="/admin/decks/{deck.id}?token={token}">{_escape(deck.title)}</a></li>'
             for deck in decks
         )
         deck_html = f"<ul>{deck_items}</ul>" if deck_items else "<p>No decks in this folder.</p>"
+        reassign_options = [
+            '<option value="">Ungrouped</option>',
+            *[
+                f'<option value="{f.id}">{_escape(_folder_label(f))}</option>'
+                for f in folders
+                if f.id != folder.id
+            ],
+        ]
+        reassign_select = f"<select name=\"new_folder_id\">{''.join(reassign_options)}</select>"
         body = f"""
         {_admin_nav(token)}
         <h2>Folder: {_escape(_folder_label(folder))}</h2>
         {deck_html}
+        <h3>Rename folder</h3>
+        <form method="post" action="/admin/folders/{folder.id}/rename">
+          <input type="hidden" name="token" value="{token}"/>
+          <input type="text" name="path" value="{_escape(folder.path)}" required/>
+          <button type="submit">Rename</button>
+        </form>
+        <h3>Delete folder</h3>
+        <form method="post" action="/admin/folders/{folder.id}/delete">
+          <input type="hidden" name="token" value="{token}"/>
+          <label><input type="radio" name="mode" value="prevent" checked/> Prevent delete if not empty</label><br/>
+          <label><input type="radio" name="mode" value="reassign"/> Reassign decks to:</label>
+          {reassign_select}
+          <button type="submit">Delete folder</button>
+        </form>
+        """
+        return _html_page(body)
+
+    @app.post("/admin/folders/{folder_id}/rename", response_class=HTMLResponse)
+    async def admin_folder_rename(folder_id: str, token: str = Form(...), path: str = Form(...)):
+        admin_id, error = _admin_required(token)
+        if error:
+            return error
+
+        async with sessionmaker() as session:
+            folder = await get_folder_by_id(session, folder_id)
+            if not folder:
+                return _html_page("<h3>Not found</h3><p>Folder not found.</p>")
+            if not settings.admin_ids and folder.admin_tg_id != admin_id:
+                return _html_page("<h3>Unauthorized</h3><p>Not allowed.</p>")
+            try:
+                updated = await update_folder_path(session, folder_id, path)
+            except ValueError as exc:
+                return _html_page(
+                    f"{_admin_nav(token)}<h3>Update failed</h3><p>{_escape(str(exc))}</p>"
+                )
+            if not updated:
+                return _html_page("<h3>Not found</h3><p>Folder not found.</p>")
+
+        body = f"""
+        {_admin_nav(token)}
+        <h3>Folder renamed</h3>
+        <p><a href="/admin/folders/{folder_id}?token={token}">Back to folder</a></p>
+        """
+        return _html_page(body)
+
+    @app.post("/admin/folders/{folder_id}/delete", response_class=HTMLResponse)
+    async def admin_folder_delete(
+        folder_id: str,
+        token: str = Form(...),
+        mode: str = Form("prevent"),
+        new_folder_id: str | None = Form(None),
+    ):
+        admin_id, error = _admin_required(token)
+        if error:
+            return error
+
+        async with sessionmaker() as session:
+            folder = await get_folder_by_id(session, folder_id)
+            if not folder:
+                return _html_page("<h3>Not found</h3><p>Folder not found.</p>")
+            if not settings.admin_ids and folder.admin_tg_id != admin_id:
+                return _html_page("<h3>Unauthorized</h3><p>Not allowed.</p>")
+
+            if mode == "reassign":
+                target_id = new_folder_id or None
+                if target_id:
+                    target_folder = await get_folder_by_id(session, target_id)
+                    if not target_folder:
+                        return _html_page("<h3>Not found</h3><p>Target folder not found.</p>")
+                    if not settings.admin_ids and target_folder.admin_tg_id != admin_id:
+                        return _html_page("<h3>Unauthorized</h3><p>Not allowed.</p>")
+                await reassign_decks_from_folder(session, folder_id, target_id)
+                await delete_folder(session, folder_id)
+            else:
+                deleted = await delete_folder_if_empty(session, folder_id)
+                if not deleted:
+                    deck_count = await count_decks_in_folder(session, folder_id)
+                    return _html_page(
+                        f"{_admin_nav(token)}<h3>Delete blocked</h3>"
+                        f"<p>Folder still contains {deck_count} deck(s).</p>"
+                    )
+
+        body = f"""
+        {_admin_nav(token)}
+        <h3>Folder deleted</h3>
+        <p><a href="/admin?token={token}">Back to admin home</a></p>
         """
         return _html_page(body)
 
@@ -181,7 +287,20 @@ def create_web_app(
                 return _html_page("<h3>Not found</h3><p>Deck not found.</p>")
             if not settings.admin_ids and deck.admin_tg_id != admin_id:
                 return _html_page("<h3>Unauthorized</h3><p>Not allowed.</p>")
+            if settings.admin_ids:
+                folders = await list_all_folders(session)
+            else:
+                folders = await list_admin_folders(session, admin_id)
 
+        folder_options = [
+            '<option value="">Ungrouped</option>',
+            *[
+                f'<option value="{folder.id}" {"selected" if deck.folder_id == folder.id else ""}>'
+                f"{_escape(_folder_label(folder))}</option>"
+                for folder in folders
+            ],
+        ]
+        folder_select = f"<select name=\"folder_id\">{''.join(folder_options)}</select>"
         body = f"""
         {_admin_nav(token)}
         <h2>{_escape(deck.title)}</h2>
@@ -190,8 +309,69 @@ def create_web_app(
           <li>New per day: {deck.new_per_day}</li>
           <li>Owner: {deck.admin_tg_id}</li>
         </ul>
+        <h3>Rename deck</h3>
+        <form method="post" action="/admin/decks/{deck.id}/rename">
+          <input type="hidden" name="token" value="{token}"/>
+          <input type="text" name="title" value="{_escape(deck.title)}" required/>
+          <button type="submit">Rename</button>
+        </form>
+        <h3>Move deck</h3>
+        <form method="post" action="/admin/decks/{deck.id}/move">
+          <input type="hidden" name="token" value="{token}"/>
+          {folder_select}
+          <button type="submit">Move</button>
+        </form>
         <p><a href="/admin/decks/{deck.id}/stats?token={token}">Deck stats</a></p>
         <p><a href="/admin/decks/{deck.id}/students?token={token}">Enrolled users</a></p>
+        """
+        return _html_page(body)
+
+    @app.post("/admin/decks/{deck_id}/rename", response_class=HTMLResponse)
+    async def admin_deck_rename(deck_id: str, token: str = Form(...), title: str = Form(...)):
+        admin_id, error = _admin_required(token)
+        if error:
+            return error
+
+        async with sessionmaker() as session:
+            deck = await get_deck_by_id(session, deck_id)
+            if not deck:
+                return _html_page("<h3>Not found</h3><p>Deck not found.</p>")
+            if not settings.admin_ids and deck.admin_tg_id != admin_id:
+                return _html_page("<h3>Unauthorized</h3><p>Not allowed.</p>")
+            await update_deck_title(session, deck_id, title)
+
+        body = f"""
+        {_admin_nav(token)}
+        <h3>Deck renamed</h3>
+        <p><a href="/admin/decks/{deck_id}?token={token}">Back to deck</a></p>
+        """
+        return _html_page(body)
+
+    @app.post("/admin/decks/{deck_id}/move", response_class=HTMLResponse)
+    async def admin_deck_move(deck_id: str, token: str = Form(...), folder_id: str | None = Form(None)):
+        admin_id, error = _admin_required(token)
+        if error:
+            return error
+
+        async with sessionmaker() as session:
+            deck = await get_deck_by_id(session, deck_id)
+            if not deck:
+                return _html_page("<h3>Not found</h3><p>Deck not found.</p>")
+            if not settings.admin_ids and deck.admin_tg_id != admin_id:
+                return _html_page("<h3>Unauthorized</h3><p>Not allowed.</p>")
+            target_id = folder_id or None
+            if target_id:
+                folder = await get_folder_by_id(session, target_id)
+                if not folder:
+                    return _html_page("<h3>Not found</h3><p>Folder not found.</p>")
+                if not settings.admin_ids and folder.admin_tg_id != admin_id:
+                    return _html_page("<h3>Unauthorized</h3><p>Not allowed.</p>")
+            await update_deck_folder(session, deck_id, target_id)
+
+        body = f"""
+        {_admin_nav(token)}
+        <h3>Deck moved</h3>
+        <p><a href="/admin/decks/{deck_id}?token={token}">Back to deck</a></p>
         """
         return _html_page(body)
 
