@@ -300,6 +300,38 @@ async def enroll_user(session: AsyncSession, user_id: str, deck_id: str, mode: s
     except IntegrityError:
         await session.rollback()
 
+async def unenroll_user_from_other_decks(session: AsyncSession, user_id: str, deck_id: str) -> None:
+    card_ids_subq = select(Card.id).where(Card.deck_id != deck_id)
+    try:
+        await session.execute(
+            delete(StudySession).where(
+                StudySession.user_id == user_id,
+                StudySession.deck_id != deck_id,
+            )
+        )
+        await session.execute(
+            delete(Flag).where(
+                Flag.user_id == user_id,
+                Flag.card_id.in_(card_ids_subq),
+            )
+        )
+        await session.execute(
+            delete(Review).where(
+                Review.user_id == user_id,
+                Review.card_id.in_(card_ids_subq),
+            )
+        )
+        await session.execute(
+            delete(Enrollment).where(
+                Enrollment.user_id == user_id,
+                Enrollment.deck_id != deck_id,
+            )
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+
 async def is_enrolled(session: AsyncSession, user_id: str, deck_id: str) -> bool:
     res = await session.execute(select(Enrollment.id).where(Enrollment.user_id==user_id, Enrollment.deck_id==deck_id))
     return res.first() is not None
