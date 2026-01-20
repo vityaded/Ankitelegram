@@ -194,7 +194,13 @@ async def get_due_learning_cards(session: AsyncSession, user_id: str, deck_id: s
     res = await session.execute(stmt)
     return [cid for (cid,) in res.all()]
 
-async def get_due_review_cards(session: AsyncSession, user_id: str, deck_id: str, now: datetime, limit: int = 50) -> list[str]:
+async def get_due_review_cards(
+    session: AsyncSession,
+    user_id: str,
+    deck_id: str,
+    now: datetime,
+    limit: int | None = 50,
+) -> list[str]:
     stmt = (
         select(Review.card_id)
         .join(Card, Card.id == Review.card_id)
@@ -206,8 +212,9 @@ async def get_due_review_cards(session: AsyncSession, user_id: str, deck_id: str
             Review.due_at <= now,
         )
         .order_by(Review.due_at.asc())
-        .limit(limit)
     )
+    if limit is not None:
+        stmt = stmt.limit(limit)
     res = await session.execute(stmt)
     return [cid for (cid,) in res.all()]
 

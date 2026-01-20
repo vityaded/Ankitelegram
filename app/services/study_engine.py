@@ -116,8 +116,9 @@ async def extend_today_with_more(
     if not deck:
         return None
 
-    due_review = await get_due_review_cards(session, user_id, deck_id, now_utc, limit=50)
     mode = await get_enrollment_mode(session, user_id, deck_id)
+    due_review_limit = None if mode == "watch" else 50
+    due_review = await get_due_review_cards(session, user_id, deck_id, now_utc, limit=due_review_limit)
     new_limit = None if mode == "watch" else deck.new_per_day + extra_new
     new = await get_new_cards(session, deck_id, user_id, new_limit)
 

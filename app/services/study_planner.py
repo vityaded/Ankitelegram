@@ -23,7 +23,8 @@ async def build_today_queue(session: AsyncSession, user_id: str, deck_id: str, n
         return []
     mode = await get_enrollment_mode(session, user_id, deck_id)
     new_limit = None if mode == "watch" else deck.new_per_day
-    due_review = await get_due_review_cards(session, user_id, deck_id, now_utc, limit=50)
+    due_review_limit = None if mode == "watch" else 50
+    due_review = await get_due_review_cards(session, user_id, deck_id, now_utc, limit=due_review_limit)
     new = await get_new_cards(session, deck_id, user_id, new_limit)
     queue = _dedupe_preserve_order(due_review + new)
     return queue
