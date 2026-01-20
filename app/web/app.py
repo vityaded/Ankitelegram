@@ -4,6 +4,7 @@ import asyncio
 import html
 import os
 import uuid
+from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, File, UploadFile, Form, Query
@@ -33,6 +34,7 @@ from app.db.repo import (
 from app.services.admin_auth import verify_upload_token
 from app.services.import_service import import_apkg_from_path
 from app.services.stats_service import admin_stats
+from app.services.student_progress import get_deck_user_study_counts
 
 def create_web_app(
     *,
@@ -400,10 +402,23 @@ def create_web_app(
         return _html_page(body)
 
     @app.get("/admin/decks/{deck_id}/students", response_class=HTMLResponse)
-    async def admin_deck_students(deck_id: str, token: str = Query(None), offset: int = 0, limit: int = 50):
+    async def admin_deck_students(
+        deck_id: str,
+        token: str = Query(None),
+        offset: int = 0,
+        limit: int = 50,
+        study_date: str | None = None,
+        tg_id: int | None = None,
+    ):
         admin_id, error = _admin_required(token)
         if error:
             return error
+        selected_date = date.today()
+        if study_date:
+            try:
+                selected_date = date.fromisoformat(study_date)
+            except ValueError:
+                selected_date = date.today()
 
         async with sessionmaker() as session:
             deck = await get_deck_by_id(session, deck_id)
@@ -411,16 +426,25 @@ def create_web_app(
                 return _html_page("<h3>Not found</h3><p>Deck not found.</p>")
             if not settings.admin_ids and deck.admin_tg_id != admin_id:
                 return _html_page("<h3>Unauthorized</h3><p>Not allowed.</p>")
-            total = await count_enrolled_students(session, deck_id)
-            students = await list_enrolled_students(session, deck_id, offset=offset, limit=limit)
+            total = await count_enrolled_students(session, deck_id, tg_id=tg_id)
+            students = await list_enrolled_students(session, deck_id, offset=offset, limit=limit, tg_id=tg_id)
+            counts = await get_deck_user_study_counts(
+                session,
+                deck_id=deck_id,
+                study_date=selected_date,
+                user_ids=[student.id for student in students],
+            )
 
             student_rows = []
             for student in students:
                 progress = await compute_overall_progress(session, student.id, deck_id)
                 states = ", ".join(f"{k}:{v}" for k, v in sorted(progress["states"].items()))
+                counts_row = counts.get(student.id, {"daily_done": 0, "total_done": 0})
                 student_rows.append(
                     "<tr>"
                     f"<td>{student.tg_id}</td>"
+                    f"<td>{counts_row['daily_done']}</td>"
+                    f"<td>{counts_row['total_done']}</td>"
                     f"<td>{progress['started']}/{progress['total_cards']}</td>"
                     f"<td>{progress['due']}</td>"
                     f"<td>{_escape(states) or 'n/a'}</td>"
@@ -430,7 +454,12 @@ def create_web_app(
         if student_rows:
             table = (
                 "<table>"
-                "<thead><tr><th>User TG ID</th><th>Started</th><th>Due</th><th>States</th></tr></thead>"
+                "<thead><tr>"
+                "<th>User TG ID</th>"
+                f"<th>Daily ({selected_date.isoformat()})</th>"
+                "<th>Total studied</th>"
+                "<th>Started</th><th>Due</th><th>States</th>"
+                "</tr></thead>"
                 f"<tbody>{''.join(student_rows)}</tbody></table>"
             )
         else:
@@ -439,15 +468,30 @@ def create_web_app(
         nav = []
         if offset > 0:
             prev_offset = max(offset - limit, 0)
-            nav.append(f'<a href="/admin/decks/{deck.id}/students?token={token}&offset={prev_offset}&limit={limit}">Prev</a>')
+            nav.append(
+                f'<a href="/admin/decks/{deck.id}/students?token={token}&offset={prev_offset}&limit={limit}'
+                f'&study_date={selected_date.isoformat()}{f"&tg_id={tg_id}" if tg_id else ""}">Prev</a>'
+            )
         if offset + limit < total:
             next_offset = offset + limit
-            nav.append(f'<a href="/admin/decks/{deck.id}/students?token={token}&offset={next_offset}&limit={limit}">Next</a>')
+            nav.append(
+                f'<a href="/admin/decks/{deck.id}/students?token={token}&offset={next_offset}&limit={limit}'
+                f'&study_date={selected_date.isoformat()}{f"&tg_id={tg_id}" if tg_id else ""}">Next</a>'
+            )
         nav_html = " | ".join(nav)
+        tg_id_value = "" if tg_id is None else tg_id
         body = f"""
         {_admin_nav(token)}
         <h2>Enrolled users: {_escape(deck.title)}</h2>
         <p>Total enrolled: {total}</p>
+        <form method="get" action="/admin/decks/{deck.id}/students">
+          <input type="hidden" name="token" value="{token}"/>
+          <label>Study date (YYYY-MM-DD)</label>
+          <input type="text" name="study_date" value="{selected_date.isoformat()}"/>
+          <label>Filter by TG ID</label>
+          <input type="number" name="tg_id" value="{tg_id_value}" min="1"/>
+          <button type="submit">Apply</button>
+        </form>
         {table}
         <p>{nav_html}</p>
         <p><a href="/admin/decks/{deck.id}?token={token}">Back to deck</a></p>
