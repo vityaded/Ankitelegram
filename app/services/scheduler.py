@@ -19,6 +19,7 @@ from app.db.repo import (
     update_session_progress,
     get_today_session,
     ensure_review_placeholder,
+    get_active_study_session_for_date,
 )
 from app.services.card_sender import send_card_to_chat
 
@@ -72,6 +73,9 @@ async def push_today_cards(*, bot: Bot, settings, sessionmaker: async_sessionmak
     for tg_id, user_id, deck_id in rows:
         try:
             async with sessionmaker() as s:
+                active_session = await get_active_study_session_for_date(s, user_id, sdate)
+                if active_session and active_session.deck_id != deck_id:
+                    continue
                 sess, _created = await start_or_resume_today(s, user_id, deck_id, sdate, now_utc)
                 cid = await ensure_current_card(s, user_id, deck_id, sdate, now_utc)
                 if not getattr(sess, "queue", None) or not cid:
