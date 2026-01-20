@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import os
 import uuid
 from pathlib import Path
@@ -10,8 +11,21 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 from aiogram import Bot
 
+from app.db.repo import (
+    count_enrolled_students,
+    count_ungrouped_decks,
+    compute_overall_progress,
+    get_deck_by_id,
+    get_folder_by_id,
+    list_admin_folders,
+    list_all_folders,
+    list_decks_in_folder,
+    list_enrolled_students,
+    list_ungrouped_decks,
+)
 from app.services.admin_auth import verify_upload_token
 from app.services.import_service import import_apkg_from_path
+from app.services.stats_service import admin_stats
 
 def create_web_app(
     *,
@@ -45,9 +59,220 @@ def create_web_app(
 </body>
 </html>""")
 
+    def _is_admin_id(admin_id: int) -> bool:
+        return (not settings.admin_ids) or (admin_id in settings.admin_ids)
+
+    def _escape(text: str | None) -> str:
+        return html.escape(text or "")
+
+    def _folder_label(folder) -> str:
+        if settings.admin_ids:
+            return f"{folder.admin_tg_id} · {folder.path}"
+        return folder.path
+
+    def _admin_required(token: str | None) -> tuple[int | None, HTMLResponse | None]:
+        if not token:
+            return None, _html_page("<h3>Unauthorized</h3><p>Missing token.</p>")
+        td = verify_upload_token(settings.upload_secret, token)
+        if not td or not _is_admin_id(td.admin_id):
+            return None, _html_page("<h3>Unauthorized</h3><p>Invalid or expired link.</p>")
+        return td.admin_id, None
+
+    def _admin_nav(token: str) -> str:
+        return f'<p><a href="/admin?token={token}">Admin home</a></p>'
+
     @app.get("/healthz")
     async def healthz():
         return PlainTextResponse("ok")
+
+    @app.get("/admin", response_class=HTMLResponse)
+    async def admin_root(token: str = Query(None)):
+        admin_id, error = _admin_required(token)
+        if error:
+            return error
+
+        async with sessionmaker() as session:
+            if settings.admin_ids:
+                folders = await list_all_folders(session)
+                ungrouped_count = await count_ungrouped_decks(session, None)
+            else:
+                folders = await list_admin_folders(session, admin_id)
+                ungrouped_count = await count_ungrouped_decks(session, admin_id)
+
+        folder_items = "".join(
+            f'<li><a href="/admin/folders/{folder.id}?token={token}">{_escape(_folder_label(folder))}</a></li>'
+            for folder in folders
+        )
+        folder_html = f"<ul>{folder_items}</ul>" if folder_items else "<p>No folders found.</p>"
+
+        ungrouped_link = ""
+        if ungrouped_count:
+            ungrouped_link = (
+                f'<p><a href="/admin/ungrouped?token={token}">'
+                f"Ungrouped decks ({ungrouped_count})</a></p>"
+            )
+
+        body = f"""
+        <h2>Admin control panel</h2>
+        <h3>Folders</h3>
+        {folder_html}
+        {ungrouped_link}
+        <p><a href="/upload?token={token}">Upload decks</a></p>
+        """
+        return _html_page(body)
+
+    @app.get("/admin/ungrouped", response_class=HTMLResponse)
+    async def admin_ungrouped(token: str = Query(None)):
+        admin_id, error = _admin_required(token)
+        if error:
+            return error
+
+        async with sessionmaker() as session:
+            admin_filter = None if settings.admin_ids else admin_id
+            decks = await list_ungrouped_decks(session, admin_filter)
+
+        deck_items = "".join(
+            f'<li><a href="/admin/decks/{deck.id}?token={token}">{_escape(deck.title)}</a></li>'
+            for deck in decks
+        )
+        deck_html = f"<ul>{deck_items}</ul>" if deck_items else "<p>No ungrouped decks.</p>"
+        body = f"""
+        {_admin_nav(token)}
+        <h2>Ungrouped decks</h2>
+        {deck_html}
+        """
+        return _html_page(body)
+
+    @app.get("/admin/folders/{folder_id}", response_class=HTMLResponse)
+    async def admin_folder(folder_id: str, token: str = Query(None)):
+        admin_id, error = _admin_required(token)
+        if error:
+            return error
+
+        async with sessionmaker() as session:
+            folder = await get_folder_by_id(session, folder_id)
+            if not folder:
+                return _html_page("<h3>Not found</h3><p>Folder not found.</p>")
+            if not settings.admin_ids and folder.admin_tg_id != admin_id:
+                return _html_page("<h3>Unauthorized</h3><p>Not allowed.</p>")
+            decks = await list_decks_in_folder(session, folder_id)
+
+        deck_items = "".join(
+            f'<li><a href="/admin/decks/{deck.id}?token={token}">{_escape(deck.title)}</a></li>'
+            for deck in decks
+        )
+        deck_html = f"<ul>{deck_items}</ul>" if deck_items else "<p>No decks in this folder.</p>"
+        body = f"""
+        {_admin_nav(token)}
+        <h2>Folder: {_escape(_folder_label(folder))}</h2>
+        {deck_html}
+        """
+        return _html_page(body)
+
+    @app.get("/admin/decks/{deck_id}", response_class=HTMLResponse)
+    async def admin_deck(deck_id: str, token: str = Query(None)):
+        admin_id, error = _admin_required(token)
+        if error:
+            return error
+
+        async with sessionmaker() as session:
+            deck = await get_deck_by_id(session, deck_id)
+            if not deck:
+                return _html_page("<h3>Not found</h3><p>Deck not found.</p>")
+            if not settings.admin_ids and deck.admin_tg_id != admin_id:
+                return _html_page("<h3>Unauthorized</h3><p>Not allowed.</p>")
+
+        body = f"""
+        {_admin_nav(token)}
+        <h2>{_escape(deck.title)}</h2>
+        <ul>
+          <li>Active: {bool(deck.is_active)}</li>
+          <li>New per day: {deck.new_per_day}</li>
+          <li>Owner: {deck.admin_tg_id}</li>
+        </ul>
+        <p><a href="/admin/decks/{deck.id}/stats?token={token}">Deck stats</a></p>
+        <p><a href="/admin/decks/{deck.id}/students?token={token}">Enrolled users</a></p>
+        """
+        return _html_page(body)
+
+    @app.get("/admin/decks/{deck_id}/stats", response_class=HTMLResponse)
+    async def admin_deck_stats(deck_id: str, token: str = Query(None)):
+        admin_id, error = _admin_required(token)
+        if error:
+            return error
+
+        async with sessionmaker() as session:
+            deck = await get_deck_by_id(session, deck_id)
+            if not deck:
+                return _html_page("<h3>Not found</h3><p>Deck not found.</p>")
+            if not settings.admin_ids and deck.admin_tg_id != admin_id:
+                return _html_page("<h3>Unauthorized</h3><p>Not allowed.</p>")
+            stats_text = await admin_stats(session, deck_id)
+
+        stats_lines = "".join(f"<li>{_escape(line)}</li>" for line in stats_text.splitlines() if line.strip())
+        stats_html = f"<ul>{stats_lines}</ul>" if stats_lines else "<p>No stats available.</p>"
+        body = f"""
+        {_admin_nav(token)}
+        <h2>Stats: {_escape(deck.title)}</h2>
+        {stats_html}
+        <p><a href="/admin/decks/{deck.id}?token={token}">Back to deck</a></p>
+        """
+        return _html_page(body)
+
+    @app.get("/admin/decks/{deck_id}/students", response_class=HTMLResponse)
+    async def admin_deck_students(deck_id: str, token: str = Query(None), offset: int = 0, limit: int = 50):
+        admin_id, error = _admin_required(token)
+        if error:
+            return error
+
+        async with sessionmaker() as session:
+            deck = await get_deck_by_id(session, deck_id)
+            if not deck:
+                return _html_page("<h3>Not found</h3><p>Deck not found.</p>")
+            if not settings.admin_ids and deck.admin_tg_id != admin_id:
+                return _html_page("<h3>Unauthorized</h3><p>Not allowed.</p>")
+            total = await count_enrolled_students(session, deck_id)
+            students = await list_enrolled_students(session, deck_id, offset=offset, limit=limit)
+
+            student_rows = []
+            for student in students:
+                progress = await compute_overall_progress(session, student.id, deck_id)
+                states = ", ".join(f"{k}:{v}" for k, v in sorted(progress["states"].items()))
+                student_rows.append(
+                    "<tr>"
+                    f"<td>{student.tg_id}</td>"
+                    f"<td>{progress['started']}/{progress['total_cards']}</td>"
+                    f"<td>{progress['due']}</td>"
+                    f"<td>{_escape(states) or 'n/a'}</td>"
+                    "</tr>"
+                )
+
+        if student_rows:
+            table = (
+                "<table>"
+                "<thead><tr><th>User TG ID</th><th>Started</th><th>Due</th><th>States</th></tr></thead>"
+                f"<tbody>{''.join(student_rows)}</tbody></table>"
+            )
+        else:
+            table = "<p>No enrolled users.</p>"
+
+        nav = []
+        if offset > 0:
+            prev_offset = max(offset - limit, 0)
+            nav.append(f'<a href="/admin/decks/{deck.id}/students?token={token}&offset={prev_offset}&limit={limit}">Prev</a>')
+        if offset + limit < total:
+            next_offset = offset + limit
+            nav.append(f'<a href="/admin/decks/{deck.id}/students?token={token}&offset={next_offset}&limit={limit}">Next</a>')
+        nav_html = " | ".join(nav)
+        body = f"""
+        {_admin_nav(token)}
+        <h2>Enrolled users: {_escape(deck.title)}</h2>
+        <p>Total enrolled: {total}</p>
+        {table}
+        <p>{nav_html}</p>
+        <p><a href="/admin/decks/{deck.id}?token={token}">Back to deck</a></p>
+        """
+        return _html_page(body)
 
     @app.get("/upload", response_class=HTMLResponse)
     async def upload_get(token: str = Query(...)):
