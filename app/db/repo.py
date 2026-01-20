@@ -8,6 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Deck, Card, User, Enrollment, Review, ReviewState, StudySession, Flag, CardTranslation, TranslationCache, DeckFolder
 
+def _normalize_folder_path(path: str) -> str:
+    normalized = path.strip().replace("\\", "/").strip("/")
+    if not normalized:
+        raise ValueError("Folder path cannot be empty.")
+    return normalized
+
 def _new_token() -> str:
     return secrets.token_urlsafe(18)
 
@@ -47,7 +53,7 @@ async def set_deck_active(session: AsyncSession, deck_id: str, active: bool) -> 
     await session.commit()
 
 async def get_or_create_folder(session: AsyncSession, admin_tg_id: int, path: str) -> DeckFolder:
-    path = path.strip().rstrip("/")
+    path = _normalize_folder_path(path)
     res = await session.execute(
         select(DeckFolder).where(DeckFolder.admin_tg_id == admin_tg_id, DeckFolder.path == path)
     )
@@ -58,6 +64,58 @@ async def get_or_create_folder(session: AsyncSession, admin_tg_id: int, path: st
     session.add(folder)
     await session.flush()
     return folder
+
+async def update_deck_title(session: AsyncSession, deck_id: str, title: str) -> bool:
+    res = await session.execute(update(Deck).where(Deck.id == deck_id).values(title=title[:255]))
+    await session.commit()
+    return bool(getattr(res, "rowcount", 0))
+
+async def update_deck_folder(session: AsyncSession, deck_id: str, folder_id: str | None) -> bool:
+    res = await session.execute(update(Deck).where(Deck.id == deck_id).values(folder_id=folder_id))
+    await session.commit()
+    return bool(getattr(res, "rowcount", 0))
+
+async def update_folder_path(session: AsyncSession, folder_id: str, path: str) -> DeckFolder | None:
+    folder_res = await session.execute(select(DeckFolder).where(DeckFolder.id == folder_id))
+    folder = folder_res.scalar_one_or_none()
+    if not folder:
+        return None
+    normalized = _normalize_folder_path(path)
+    existing_res = await session.execute(
+        select(DeckFolder).where(
+            DeckFolder.admin_tg_id == folder.admin_tg_id,
+            DeckFolder.path == normalized,
+            DeckFolder.id != folder_id,
+        )
+    )
+    if existing_res.scalar_one_or_none():
+        raise ValueError("Folder path already exists.")
+    await session.execute(update(DeckFolder).where(DeckFolder.id == folder_id).values(path=normalized))
+    await session.commit()
+    folder.path = normalized
+    return folder
+
+async def count_decks_in_folder(session: AsyncSession, folder_id: str) -> int:
+    res = await session.execute(select(func.count(Deck.id)).where(Deck.folder_id == folder_id))
+    return int(res.scalar() or 0)
+
+async def reassign_decks_from_folder(session: AsyncSession, folder_id: str, new_folder_id: str | None) -> int:
+    res = await session.execute(update(Deck).where(Deck.folder_id == folder_id).values(folder_id=new_folder_id))
+    await session.commit()
+    return int(getattr(res, "rowcount", 0) or 0)
+
+async def delete_folder_if_empty(session: AsyncSession, folder_id: str) -> bool:
+    deck_count = await count_decks_in_folder(session, folder_id)
+    if deck_count:
+        return False
+    await session.execute(delete(DeckFolder).where(DeckFolder.id == folder_id))
+    await session.commit()
+    return True
+
+async def delete_folder(session: AsyncSession, folder_id: str) -> bool:
+    res = await session.execute(delete(DeckFolder).where(DeckFolder.id == folder_id))
+    await session.commit()
+    return bool(getattr(res, "rowcount", 0))
 
 async def list_admin_folders(session: AsyncSession, admin_tg_id: int) -> list[DeckFolder]:
     res = await session.execute(
