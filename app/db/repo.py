@@ -257,7 +257,13 @@ async def get_enrollment_mode(session: AsyncSession, user_id: str, deck_id: str)
     mode = (mode or "anki").lower()
     return mode if mode in ("anki", "watch") else "anki"
 
-async def list_enrolled_students(session: AsyncSession, deck_id: str, offset: int = 0, limit: int = 10) -> list[User]:
+async def list_enrolled_students(
+    session: AsyncSession,
+    deck_id: str,
+    offset: int = 0,
+    limit: int = 10,
+    tg_id: int | None = None,
+) -> list[User]:
     stmt = (
         select(User)
         .join(Enrollment, Enrollment.user_id == User.id)
@@ -266,11 +272,16 @@ async def list_enrolled_students(session: AsyncSession, deck_id: str, offset: in
         .offset(offset)
         .limit(limit)
     )
+    if tg_id is not None:
+        stmt = stmt.where(User.tg_id == tg_id)
     res = await session.execute(stmt)
     return list(res.scalars().all())
 
-async def count_enrolled_students(session: AsyncSession, deck_id: str) -> int:
-    res = await session.execute(select(func.count(Enrollment.id)).where(Enrollment.deck_id == deck_id))
+async def count_enrolled_students(session: AsyncSession, deck_id: str, tg_id: int | None = None) -> int:
+    stmt = select(func.count(Enrollment.id)).join(User, User.id == Enrollment.user_id).where(Enrollment.deck_id == deck_id)
+    if tg_id is not None:
+        stmt = stmt.where(User.tg_id == tg_id)
+    res = await session.execute(stmt)
     return int(res.scalar() or 0)
 
 # --- Reviews ---

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta, datetime
 
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.repo import (
@@ -9,6 +10,7 @@ from app.db.repo import (
     get_study_sessions_for_user_deck_in_range,
     get_today_session,
 )
+from app.db.models import StudySession
 
 
 def _session_progress(session_obj) -> tuple[int, int]:
@@ -42,3 +44,31 @@ async def get_overall_progress_summary(
     session: AsyncSession, user_id: str, deck_id: str, now: datetime | None = None
 ) -> dict:
     return await compute_overall_progress(session, user_id, deck_id, now=now)
+
+
+async def get_deck_user_study_counts(
+    session: AsyncSession,
+    deck_id: str,
+    study_date: date,
+    user_ids: list[str],
+) -> dict[str, dict[str, int]]:
+    if not user_ids:
+        return {}
+    stmt = (
+        select(
+            StudySession.user_id,
+            func.coalesce(func.sum(StudySession.pos), 0).label("total_done"),
+            func.coalesce(
+                func.sum(case((StudySession.study_date == study_date, StudySession.pos), else_=0)),
+                0,
+            ).label("daily_done"),
+        )
+        .where(StudySession.deck_id == deck_id, StudySession.user_id.in_(user_ids))
+        .group_by(StudySession.user_id)
+    )
+    res = await session.execute(stmt)
+    counts = {
+        user_id: {"daily_done": int(daily_done), "total_done": int(total_done)}
+        for user_id, total_done, daily_done in res.all()
+    }
+    return counts
