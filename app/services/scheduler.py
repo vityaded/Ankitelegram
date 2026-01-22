@@ -78,7 +78,7 @@ async def push_today_cards(*, bot: Bot, settings, sessionmaker: async_sessionmak
                     continue
                 sess, _created = await start_or_resume_today(s, user_id, deck_id, sdate, now_utc)
                 cid = await ensure_current_card(s, user_id, deck_id, sdate, now_utc)
-                if not getattr(sess, "queue", None) or not cid:
+                if not cid:
                     continue
 
                 card = await get_card(s, cid)
