@@ -65,7 +65,7 @@ async def start_with_payload(message: Message, session: AsyncSession, settings, 
         sess, _created = await start_or_resume_today(session, user_id, deck_id, sdate, now_utc)
         cid = await ensure_current_card(session, user_id, deck_id, sdate, now_utc)
 
-        if not getattr(sess, "queue", None) or not cid:
+        if not cid:
             await message.answer(done_today(), reply_markup=kb_study_more(deck_id))
             return
 
