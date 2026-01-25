@@ -12,6 +12,7 @@ from app.db.repo import (
     get_due_review_cards,
     get_enrollment_mode,
     get_new_cards,
+    get_learning_cards_any_due,
     get_today_session,
     update_session_progress,
     update_session_queue,
@@ -55,7 +56,11 @@ async def ensure_current_card(
     pos = getattr(sess, "pos", 0) or 0
     queue = getattr(sess, "queue", []) or []
 
-    learning_due = await get_due_learning_cards(session, user_id, deck_id, now_utc, limit=1)
+    mode = await get_enrollment_mode(session, user_id, deck_id)
+    if mode == "watch":
+        learning_due = await get_learning_cards_any_due(session, user_id, deck_id, limit=1)
+    else:
+        learning_due = await get_due_learning_cards(session, user_id, deck_id, now_utc, limit=1)
     if learning_due:
         cid = learning_due[0]
         claimed = await claim_current_if_none(session, sess.id, cid)
