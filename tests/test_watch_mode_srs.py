@@ -44,6 +44,8 @@ def test_watch_first_bad_enters_srs():
     assert updated.watch_failed is True
     assert updated.watch_streak == 0
     assert updated.state in (ReviewState.learning.value, ReviewState.review.value)
+    assert updated.due_at is not None
+    assert updated.due_at <= now
 
 
 def test_watch_requires_two_consecutive_ok_after_failure():
@@ -86,6 +88,8 @@ def test_watch_requires_two_consecutive_ok_after_failure():
         watch_target=2,
     )
     assert review.watch_streak == 0
+    assert review.due_at is not None
+    assert review.due_at <= now + timedelta(minutes=2)
 
     review = apply_srs_by_mode(
         review=review,

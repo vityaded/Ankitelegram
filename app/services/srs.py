@@ -114,6 +114,7 @@ def apply_srs_by_mode(
         )
 
     is_ok = verdict == Verdict.OK
+    is_failure = verdict != Verdict.OK
 
     if review is None:
         if is_ok:
@@ -140,6 +141,8 @@ def apply_srs_by_mode(
             last_answer_raw=last_answer_raw,
             last_score=last_score,
         )
+        if updated.state == ReviewState.learning.value and is_failure:
+            updated.due_at = now_utc
         updated.watch_failed = True
         updated.watch_streak = 0
         return updated
@@ -176,6 +179,8 @@ def apply_srs_by_mode(
             last_answer_raw=last_answer_raw,
             last_score=last_score,
         )
+        if updated.state == ReviewState.learning.value and is_failure:
+            updated.due_at = now_utc
         updated.watch_failed = True
         updated.watch_streak = 0
         return updated
@@ -189,6 +194,8 @@ def apply_srs_by_mode(
         last_answer_raw=last_answer_raw,
         last_score=last_score,
     )
+    if updated.state == ReviewState.learning.value and is_failure:
+        updated.due_at = now_utc
 
     if is_ok:
         updated.watch_streak = int(getattr(updated, "watch_streak", 0) or 0) + 1

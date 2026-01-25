@@ -252,6 +252,22 @@ async def get_due_learning_cards(session: AsyncSession, user_id: str, deck_id: s
     res = await session.execute(stmt)
     return [cid for (cid,) in res.all()]
 
+async def get_learning_cards_any_due(session: AsyncSession, user_id: str, deck_id: str, limit: int = 1) -> list[str]:
+    stmt = (
+        select(Review.card_id)
+        .join(Card, Card.id == Review.card_id)
+        .where(
+            Review.user_id == user_id,
+            Card.deck_id == deck_id,
+            Review.state == "learning",
+            Review.due_at.is_not(None),
+        )
+        .order_by(Review.due_at.asc())
+        .limit(limit)
+    )
+    res = await session.execute(stmt)
+    return [cid for (cid,) in res.all()]
+
 async def get_due_review_cards(
     session: AsyncSession,
     user_id: str,
